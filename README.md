@@ -1,2 +1,3 @@
-# zergity.github.io
-Zergity Github
+# Zergity
+
+[Mind Unlock](/mind-unlock)
