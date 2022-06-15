@@ -8,6 +8,8 @@
             const btn = document.getElementById("btn-unlock")
             btn.innerHTML = "Unlocked"
             btn.disabled = true
+            window?.chrome?.webview?.postMessage?.('webview.unlock')
+            window.postMessage('unlock', '*')
         }
 
         function load() {
