@@ -2,14 +2,21 @@
     <script>
         const key = 'name'
 
+        function notifyWebview(message) {
+            if (typeof webview === 'undefined') {
+                console.error('webview is not defined')
+                return
+            }
+            webview?.receiveMessage?.(JSON.stringify(message))
+        }
+
         function store() {
             const value = document.getElementById("name").value
             localStorage.setItem(key, value)
             const btn = document.getElementById("btn-unlock")
             btn.innerHTML = "Unlocked"
             btn.disabled = true
-            window?.chrome?.webview?.postMessage?.('WEBVIEW.UNLOCK')
-            window.postMessage('UNLOCK', '*')
+            notifyWebview('WEBVIEW.UNLOCK')
         }
 
         function load() {
