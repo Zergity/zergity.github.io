@@ -7237,7 +7237,7 @@ function handleTouchMove(e) {
         
         if (lastTouchDistance) {
             const distanceRatio = currentDistance / lastTouchDistance;
-            const zoomFactor = distanceRatio * 0.5;
+            const zoomFactor = distanceRatio * 0.01;
             
             // Apply zoom
             zoomLevel *= zoomFactor;
