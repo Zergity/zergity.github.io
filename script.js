@@ -7235,30 +7235,16 @@ function handleTouchMove(e) {
         // Handle pinch zoom
         const currentDistance = getTouchDistance(e.touches[0], e.touches[1]);
         
-        if (lastTouchDistance && Math.abs(currentDistance - lastTouchDistance) > 2) {
-            // Calculate zoom factor based on distance change, but make it slower
+        if (lastTouchDistance) {
             const distanceRatio = currentDistance / lastTouchDistance;
             
-            // Slow down the zoom rate by reducing the effect of distance changes
-            const zoomSensitivity = 0.3; // Lower value = slower zoom
-            let zoomFactor = 1 + (distanceRatio - 1) * zoomSensitivity;
-            
-            // Clamp the zoom factor to prevent too fast changes
-            zoomFactor = Math.max(0.95, Math.min(1.05, zoomFactor));
-            
             // Apply zoom
-            const oldZoomLevel = zoomLevel;
-            zoomLevel *= zoomFactor;
-            zoomLevel = Math.max(0.5, Math.min(3.0, zoomLevel));
+            zoomLevel *= distanceRatio;
+            hexSize = baseHexSize * zoomLevel;
+            hexWidth = hexSize * 2;
+            hexHeight = hexSize * Math.sqrt(3);
             
-            // Only redraw if zoom actually changed significantly
-            if (Math.abs(zoomLevel - oldZoomLevel) > 0.005) {
-                hexSize = baseHexSize * zoomLevel;
-                hexWidth = hexSize * 2;
-                hexHeight = hexSize * Math.sqrt(3);
-                
-                drawGame();
-            }
+            drawGame();
         }
         
         lastTouchDistance = currentDistance;
