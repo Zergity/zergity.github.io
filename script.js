@@ -72,7 +72,7 @@ let boardOffsetX;
 let boardOffsetY;
 let mapRotated = false; // false = Player 1's perspective, true = Player 2's perspective
 let mapFlippingEnabled = true; // Toggle for automatic map flipping on player switch (auto-managed based on AI)
-let aiEnabled = { 1: false, 2: false }; // Track which players are AI controlled
+let aiEnabled = { 1: false, 2: true }; // Track which players are AI controlled - Default: P1 human vs P2 AI
 
 // AI Aggression System
 const BASE_AGG = 70; // Base aggression level (0-100 scale)
@@ -4753,7 +4753,10 @@ function initGame() {
         }
         console.log('Loaded saved game state');
     } else {
-        // Create new game
+        // Create new game with default AI settings: P1 human vs P2 AI
+        aiEnabled = { 1: false, 2: true };
+        console.log('Starting new game with default: P1 human vs P2 AI');
+        
         // Create decks for both players (40 cards each: A-10 of 4 suits)
         const deck1 = createDeck();
         const deck2 = createDeck();
@@ -5475,10 +5478,19 @@ function performCombinedAttack(targetRow, targetCol) {
         gameState.leaderAttackedThisTurn = true;
         
         // Leader stays on the board and doesn't counter-attack (0 attack)
-        // All attackers survive and get exhausted
+        // RULE: All attackers are discarded after attacking the enemy leader
         for (const selected of gameState.selectedCards) {
+            if (selected.card.suit === 'joker') {
+                console.warn('Leader in combined attack against leader - leader survives but gets exhausted');
+                // Leader survives but gets exhausted
             gameState.cardsAttackedThisTurn.add(selected.card.id);
-            gameState.cardsMovedThisTurn.add(selected.card.id); // Mark as exhausted
+                gameState.cardsMovedThisTurn.add(selected.card.id);
+            } else {
+                // Regular card in combined attack - discard it
+                gameState.players[gameState.currentPlayer].discarded.push(selected.card);
+                gameState.board[selected.position[0]][selected.position[1]] = null;
+                console.log(`Card ${selected.card.suit} ${selected.card.value} discarded after combined attack on enemy leader`);
+            }
         }
     } else {
         // Regular combined combat resolution
@@ -5876,9 +5888,18 @@ function attack(fromRow, fromCol, toRow, toCol) {
         gameState.leaderAttackedThisTurn = true;
         
         // Leader stays on the board and doesn't counter-attack (0 attack)
-        // Attacker survives and gets exhausted
+        // RULE: Attacker is discarded after attacking the enemy leader
+        if (attacker.suit === 'joker') {
+            console.warn('Leader attacked leader - leader survives but gets exhausted (cannot be discarded)');
+            // Leader survives but gets exhausted
         gameState.cardsAttackedThisTurn.add(attacker.id);
-        gameState.cardsMovedThisTurn.add(attacker.id); // Mark as exhausted
+            gameState.cardsMovedThisTurn.add(attacker.id);
+        } else {
+            // Regular card attacking leader - discard the attacker
+            gameState.players[attacker.owner].discarded.push(attacker);
+            gameState.board[fromRow][fromCol] = null;
+            console.log(`Card ${attacker.suit} ${attacker.value} discarded after attacking enemy leader`);
+        }
     } else {
         // Regular combat resolution
         const defenderDestroyed = totalAttack >= actualDefender.defense;
@@ -6704,6 +6725,9 @@ function resetGame() {
     
     // Clear undo history when resetting
     gameHistory = [];
+    
+    // Reset AI settings to default: P1 human vs P2 AI
+    aiEnabled = { 1: false, 2: true };
     
     clearSavedGame(); // Clear saved game when resetting
     initGame();
