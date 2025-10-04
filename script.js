@@ -7191,59 +7191,36 @@ let touchStartTime = 0;
 let touchStartPos = null;
 let lastTouchPos = null;
 let lastTouchDistance = null;
-let lastTouchCenter = null;
-let isPinching = false;
-let initialPinchDistance = null;
-let initialZoomLevel = null;
 
 function handleTouchStart(e) {
     e.preventDefault(); // Prevent default touch behaviors
     
     if (e.touches.length === 1) {
-        // Single touch - only proceed if not already pinching
-        if (!isPinching) {
-            const touch = e.touches[0];
-            touchStartTime = Date.now();
-            touchStartPos = { x: touch.clientX, y: touch.clientY };
-            lastTouchPos = { x: touch.clientX, y: touch.clientY };
-            
-            // Create mock mouse event
-            const mouseEvent = new MouseEvent('mousedown', {
-                clientX: touch.clientX,
-                clientY: touch.clientY,
-                button: 0
-            });
-            handleMapDragStart(mouseEvent);
-        }
+        // Single touch - simulate mouse down
+        const touch = e.touches[0];
+        touchStartTime = Date.now();
+        touchStartPos = { x: touch.clientX, y: touch.clientY };
+        lastTouchPos = { x: touch.clientX, y: touch.clientY };
+        
+        // Create mock mouse event
+        const mouseEvent = new MouseEvent('mousedown', {
+            clientX: touch.clientX,
+            clientY: touch.clientY,
+            button: 0
+        });
+        handleMapDragStart(mouseEvent);
     } else if (e.touches.length === 2) {
-        // Two finger touch - start pinch gesture
-        isPinching = true;
+        // Two finger touch - prepare for zoom/pan
         isDraggingMap = false;
         draggedCard = null;
-        
-        // Store initial pinch state
-        const rect = canvas.getBoundingClientRect();
         lastTouchDistance = getTouchDistance(e.touches[0], e.touches[1]);
-        initialPinchDistance = lastTouchDistance;
-        initialZoomLevel = zoomLevel;
-        
-        // Calculate center point of pinch
-        lastTouchCenter = {
-            x: ((e.touches[0].clientX + e.touches[1].clientX) / 2) - rect.left,
-            y: ((e.touches[0].clientY + e.touches[1].clientY) / 2) - rect.top
-        };
-        
-        // Reset single touch variables
-        touchStartPos = null;
-        lastTouchPos = null;
     }
 }
 
 function handleTouchMove(e) {
     e.preventDefault(); // Prevent scrolling
     
-    if (e.touches.length === 1 && lastTouchPos && !isPinching) {
-        // Single touch panning
+    if (e.touches.length === 1 && lastTouchPos) {
         const touch = e.touches[0];
         
         // Create mock mouse event for move
@@ -7254,55 +7231,22 @@ function handleTouchMove(e) {
         
         handleMouseMove(mouseEvent);
         lastTouchPos = { x: touch.clientX, y: touch.clientY };
-    } else if (e.touches.length === 2 && isPinching) {
+    } else if (e.touches.length === 2) {
         // Handle pinch zoom
         const currentDistance = getTouchDistance(e.touches[0], e.touches[1]);
-        const rect = canvas.getBoundingClientRect();
         
-        // Calculate current center point
-        const currentCenter = {
-            x: ((e.touches[0].clientX + e.touches[1].clientX) / 2) - rect.left,
-            y: ((e.touches[0].clientY + e.touches[1].clientY) / 2) - rect.top
-        };
-        
-        if (initialPinchDistance && lastTouchCenter) {
-            // Calculate zoom based on distance ratio from initial pinch
-            const distanceRatio = currentDistance / initialPinchDistance;
-            let targetZoomLevel = initialZoomLevel * distanceRatio;
+        if (lastTouchDistance) {
+            const distanceRatio = currentDistance / lastTouchDistance;
+            const zoomFactor = distanceRatio * 0.5;
             
-            // Apply smoothing to prevent jittery behavior
-            const zoomSensitivity = 0.8; // Adjust sensitivity (0.1 = very slow, 1.0 = full speed)
-            targetZoomLevel = zoomLevel + (targetZoomLevel - zoomLevel) * zoomSensitivity;
+            // Apply zoom
+            zoomLevel *= zoomFactor;
+            zoomLevel = Math.max(0.5, Math.min(3.0, zoomLevel));
+            hexSize = baseHexSize * zoomLevel;
+            hexWidth = hexSize * 2;
+            hexHeight = hexSize * Math.sqrt(3);
             
-            // Clamp zoom level
-            const newZoomLevel = Math.max(0.5, Math.min(3.0, targetZoomLevel));
-            
-            if (Math.abs(newZoomLevel - zoomLevel) > 0.005) {
-                // Get world position at pinch center before zoom
-                const worldX = (lastTouchCenter.x - boardOffsetX) / hexSize;
-                const worldY = (lastTouchCenter.y - boardOffsetY) / hexSize;
-                
-                // Update zoom level and hex size
-                zoomLevel = newZoomLevel;
-                hexSize = baseHexSize * zoomLevel;
-                hexWidth = hexSize * 2;
-                hexHeight = hexSize * Math.sqrt(3);
-                
-                // Adjust board offset to keep pinch center stable
-                boardOffsetX = lastTouchCenter.x - (worldX * hexSize);
-                boardOffsetY = lastTouchCenter.y - (worldY * hexSize);
-                
-                // Handle center point movement during pinch
-                const centerDeltaX = currentCenter.x - lastTouchCenter.x;
-                const centerDeltaY = currentCenter.y - lastTouchCenter.y;
-                boardOffsetX += centerDeltaX;
-                boardOffsetY += centerDeltaY;
-                
-                drawGame();
-            }
-            
-            // Update center for next frame
-            lastTouchCenter = currentCenter;
+            drawGame();
         }
         
         lastTouchDistance = currentDistance;
@@ -7314,80 +7258,44 @@ function handleTouchEnd(e) {
     
     if (e.touches.length === 0) {
         // All touches ended
-        if (isPinching) {
-            // End of pinch gesture
-            isPinching = false;
-        } else {
-            // End of single touch
-            const touchDuration = Date.now() - touchStartTime;
-            const touchDistance = lastTouchPos && touchStartPos ? 
-                Math.sqrt(
-                    Math.pow(lastTouchPos.x - touchStartPos.x, 2) + 
-                    Math.pow(lastTouchPos.y - touchStartPos.y, 2)
-                ) : 0;
-            
-            // If touch was short and didn't move much, treat as click
-            if (touchDuration < 300 && touchDistance < 10 && touchStartPos) {
-                const clickEvent = new MouseEvent('click', {
-                    clientX: touchStartPos.x,
-                    clientY: touchStartPos.y
-                });
-                handleCanvasClick(clickEvent);
-            }
-            
-            // Create mock mouse up event
-            if (lastTouchPos) {
-                const mouseEvent = new MouseEvent('mouseup', {
-                    clientX: lastTouchPos.x,
-                    clientY: lastTouchPos.y
-                });
-                handleMapDragEnd(mouseEvent);
-            }
+        const touchDuration = Date.now() - touchStartTime;
+        const touchDistance = lastTouchPos && touchStartPos ? 
+            Math.sqrt(
+                Math.pow(lastTouchPos.x - touchStartPos.x, 2) + 
+                Math.pow(lastTouchPos.y - touchStartPos.y, 2)
+            ) : 0;
+        
+        // If touch was short and didn't move much, treat as click
+        if (touchDuration < 300 && touchDistance < 10 && touchStartPos) {
+            const clickEvent = new MouseEvent('click', {
+                clientX: touchStartPos.x,
+                clientY: touchStartPos.y
+            });
+            handleCanvasClick(clickEvent);
         }
         
-        // Reset all touch tracking
+        // Create mock mouse up event
+        if (lastTouchPos) {
+            const mouseEvent = new MouseEvent('mouseup', {
+                clientX: lastTouchPos.x,
+                clientY: lastTouchPos.y
+            });
+            handleMapDragEnd(mouseEvent);
+        }
+        
+        // Reset touch tracking
         touchStartTime = 0;
         touchStartPos = null;
         lastTouchPos = null;
         lastTouchDistance = null;
-        lastTouchCenter = null;
-        initialPinchDistance = null;
-        initialZoomLevel = null;
-        isPinching = false;
-    } else if (e.touches.length === 1 && isPinching) {
-        // Went from two fingers to one - end pinch, start single touch
-        isPinching = false;
-        lastTouchDistance = null;
-        lastTouchCenter = null;
-        initialPinchDistance = null;
-        initialZoomLevel = null;
-        
-        // Start single touch interaction
-        const touch = e.touches[0];
-        touchStartTime = Date.now();
-        touchStartPos = { x: touch.clientX, y: touch.clientY };
-        lastTouchPos = { x: touch.clientX, y: touch.clientY };
-        
-        const mouseEvent = new MouseEvent('mousedown', {
-            clientX: touch.clientX,
-            clientY: touch.clientY,
-            button: 0
-        });
-        handleMapDragStart(mouseEvent);
     }
 }
 
 function getTouchDistance(touch1, touch2) {
-    const dx = touch2.clientX - touch1.clientX;
-    const dy = touch2.clientY - touch1.clientY;
-    return Math.sqrt(dx * dx + dy * dy);
-}
-
-function getTouchCenter(touch1, touch2, canvasRect) {
-    return {
-        x: ((touch1.clientX + touch2.clientX) / 2) - canvasRect.left,
-        y: ((touch1.clientY + touch2.clientY) / 2) - canvasRect.top
-    };
+    return Math.sqrt(
+        Math.pow(touch2.clientX - touch1.clientX, 2) + 
+        Math.pow(touch2.clientY - touch1.clientY, 2)
+    );
 }
 
 function countCardsOnMap(player) {
