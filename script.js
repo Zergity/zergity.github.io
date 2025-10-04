@@ -40,6 +40,7 @@ let gameState = {
     leaderAttackedThisTurn: false,
     cardsMovedThisTurn: new Set(),
     cardsAttackedThisTurn: new Set(),
+    cardsAttackExhaustion: new Map(), // Maps card.id -> turn number when attack exhaustion ends
     moveCount: 1, // Track total moves for aggressor rule
     firstPlayer: 1 // Track who had the first turn (aggressor)
 };
@@ -3480,6 +3481,16 @@ let hoveredHex = null; // Track which hex is being hovered
 let hoveredAttackTarget = null; // Track hovered attack target
 let attackPreviewResults = null; // Store attack results for preview
 
+// Mobile hover state for attack-only tap-to-hover
+let mobileHoveredHex = null; // Track mobile tap hover hex
+let isMobileHovering = false; // Track if in mobile hover state
+
+// Mobile multi-select state 
+let isMobileMultiSelectMode = false; // Track if in mobile multi-select mode
+
+// Hand card summoning state
+let validDiscards = []; // Track positions where cards will be discarded during replacement
+
 // Drag functionality
 let isDraggingCard = false;
 let isDraggingMap = false;
@@ -3492,11 +3503,12 @@ let mapDragStartY = 0;
 // LocalStorage functions for game persistence
 function saveGameState() {
     try {
-        // Convert Set to Array for JSON serialization
+        // Convert Set to Array and Map to Object for JSON serialization
         const gameStateToSave = {
             ...gameState,
             cardsMovedThisTurn: Array.from(gameState.cardsMovedThisTurn),
             cardsAttackedThisTurn: Array.from(gameState.cardsAttackedThisTurn),
+            cardsAttackExhaustion: Object.fromEntries(gameState.cardsAttackExhaustion),
             mapRotated: mapRotated, // Save map rotation state
             mapFlippingEnabled: mapFlippingEnabled, // Save map flipping setting
             aiEnabled: aiEnabled, // Save AI player settings
@@ -3515,9 +3527,10 @@ function loadGameState() {
         const savedState = localStorage.getItem('tcg-game-state');
         if (savedState) {
             const parsedState = JSON.parse(savedState);
-            // Convert Array back to Set
+            // Convert Array back to Set and Object back to Map
             parsedState.cardsMovedThisTurn = new Set(parsedState.cardsMovedThisTurn || []);
             parsedState.cardsAttackedThisTurn = new Set(parsedState.cardsAttackedThisTurn || []);
+            parsedState.cardsAttackExhaustion = new Map(Object.entries(parsedState.cardsAttackExhaustion || {}));
             // Restore map rotation state
             if (parsedState.mapRotated !== undefined) {
                 mapRotated = parsedState.mapRotated;
@@ -3574,6 +3587,7 @@ function saveStateToHistory() {
         ...gameState,
         cardsMovedThisTurn: new Set(gameState.cardsMovedThisTurn),
         cardsAttackedThisTurn: new Set(gameState.cardsAttackedThisTurn),
+        cardsAttackExhaustion: new Map(gameState.cardsAttackExhaustion),
         board: gameState.board.map(row => [...row]), // Deep copy the board
         players: {
             1: {
@@ -3645,6 +3659,7 @@ function undoLastMove() {
     gameState.leaderAttackedThisTurn = previousState.leaderAttackedThisTurn;
     gameState.cardsMovedThisTurn = new Set(previousState.cardsMovedThisTurn);
     gameState.cardsAttackedThisTurn = new Set(previousState.cardsAttackedThisTurn);
+    gameState.cardsAttackExhaustion = new Map(previousState.cardsAttackExhaustion || []);
     
     // Clear current selections
     clearSelection();
@@ -4877,6 +4892,16 @@ function initGame(preserveAISettings = false) {
         if (!gameState.selectedCards) {
             gameState.selectedCards = [];
         }
+        // Ensure proper data structures are initialized
+        if (!(gameState.cardsMovedThisTurn instanceof Set)) {
+            gameState.cardsMovedThisTurn = new Set(gameState.cardsMovedThisTurn || []);
+        }
+        if (!(gameState.cardsAttackedThisTurn instanceof Set)) {
+            gameState.cardsAttackedThisTurn = new Set(gameState.cardsAttackedThisTurn || []);
+        }
+        if (!(gameState.cardsAttackExhaustion instanceof Map)) {
+            gameState.cardsAttackExhaustion = new Map(Object.entries(gameState.cardsAttackExhaustion || {}));
+        }
         console.log('Loaded saved game state (AI settings remain as default)');
     } else {
         // Create new game
@@ -4925,6 +4950,12 @@ function initGame(preserveAISettings = false) {
     // Show setup caption when game starts (only for new games, not loaded games)
     if (gameState.phase === 'setup' && gameState.turn === 1) {
         showSetupCaption();
+        
+        // Auto-select leader for the starting player if they haven't placed their leader yet
+        const leaderOnBoard = findLeaderPosition(gameState.currentPlayer);
+        if (!leaderOnBoard) {
+            autoSelectLeaderForSetup(gameState.currentPlayer);
+        }
     }
     
     // Trigger AI move if current player is AI controlled
@@ -5257,8 +5288,11 @@ function handleSetupClick(row, col) {
                 gameState.players[gameState.currentPlayer].hand.filter(c => c.id !== card.id);
             gameState.setupCardsPlaced[gameState.currentPlayer]++;
             
+            // Track if this is a leader being placed
+            const isLeaderPlacement = card.suit === 'joker';
+            
             // If this is a leader being placed, update the leader position and track it
-            if (card.suit === 'joker') {
+            if (isLeaderPlacement) {
                 gameState.players[gameState.currentPlayer].leaderPosition = [row, col];
                 gameState.setupLeaderPlaced[gameState.currentPlayer] = true;
             }
@@ -5282,8 +5316,12 @@ function handleSetupClick(row, col) {
                     showPlayerTurnCaption(gameState.currentPlayer);
                 }, 2500);
                 startNewTurn();
+            } else if (isLeaderPlacement) {
+                // Auto end turn immediately after placing leader
+                console.log('Leader placed - ending turn automatically');
+                endTurn();
             } else {
-                // Auto end turn after card placement in setup
+                // Auto end turn after regular card placement in setup
                 endTurn();
             }
         }
@@ -5297,24 +5335,61 @@ function handleSetupClick(row, col) {
 function handlePlayClick(row, col, ctrlKey = false) {
     const clickedCard = gameState.board[row][col];
     
+    // Clear mobile hover state for non-attack actions
+    if (isMobileHovering) {
+        clearMobileHover();
+    }
+    
     if (!clickedCard) {
         // Clicking empty grid
         if (gameState.selectedCard) {
-            // Try to move the selected card
-            handleSingleCardPlay(row, col, null);
+            // Check if selected card is from hand (summoning)
+            const selectedCardPos = findCardPosition(gameState.selectedCard);
+            if (!selectedCardPos) {
+                // Selected card is from hand - try to summon
+                handleHandCardSummoning(row, col);
+            } else {
+                // Try to move the selected card on board
+                handleSingleCardPlay(row, col, null);
+            }
+        } else if (gameState.selectedCards.length > 0 || isMobileMultiSelectMode) {
+            // Clear multi-selection when tapping empty space
+            clearSelection();
         } else {
             // No card selected - just clear selection
             clearSelection();
         }
-    } else if (clickedCard.owner === gameState.currentPlayer) {
-        if (ctrlKey) {
-            // Ctrl+click - add to multi-selection
-            handleMultiSelection(clickedCard, row, col);
+    } else if (gameState.selectedCard) {
+        // Check if selected card is from hand (summoning) or from board (attack/move)
+        const selectedCardPos = findCardPosition(gameState.selectedCard);
+        if (!selectedCardPos) {
+            // Selected card is from hand - prioritize summoning over card selection
+            if (clickedCard.owner === gameState.currentPlayer) {
+                // Check if this is a valid summoning position (adjacent to leader)
+                const isValidSummonPosition = gameState.validMoves.some(([r, c]) => r === row && c === col);
+                if (isValidSummonPosition) {
+                    // Perform replacement summoning
+                    handleHandCardSummoning(row, col);
+                } else {
+                    // Not a valid summoning position, fall back to normal card selection
+                    handleMobileCardSelection(clickedCard, row, col, ctrlKey);
+                }
+            } else {
+                console.log('Cannot summon: Position occupied by enemy card');
+            }
         } else {
-            // Regular click - single select (clear others first)
-            clearSelection();
-            selectCard(clickedCard, row, col);
+            // Single card selected from board - handle attacks or card selection
+            if (clickedCard.owner !== gameState.currentPlayer) {
+                // Enemy card - try to attack
+                handleSingleCardPlay(row, col, clickedCard);
+            } else {
+                // Friendly card - normal selection behavior
+                handleMobileCardSelection(clickedCard, row, col, ctrlKey);
+            }
         }
+    } else if (clickedCard.owner === gameState.currentPlayer) {
+        // No card selected - normal friendly card selection
+        handleMobileCardSelection(clickedCard, row, col, ctrlKey);
     } else if (gameState.selectedCards && gameState.selectedCards.length > 0) {
         // Clicking enemy card with multi-selection - try combined attack
         if (gameState.validAttacks.some(([r, c]) => r === row && c === col)) {
@@ -5323,9 +5398,6 @@ function handlePlayClick(row, col, ctrlKey = false) {
             performCombinedAttack(row, col);
             clearSelection();
         }
-    } else if (gameState.selectedCard) {
-        // Single card selected - try to attack enemy card
-        handleSingleCardPlay(row, col, clickedCard);
     }
     
     updateCanvas();
@@ -5378,8 +5450,33 @@ function handleSingleCardPlay(row, col, clickedCard) {
 function handleCardClick(card) {
     if (gameState.phase === 'setup' && gameState.setupStep === 'place-cards') {
         if (card.owner === gameState.currentPlayer) {
-            gameState.selectedCard = card;
-            updateUI();
+            // Check if leader has been placed
+            const currentPlayerData = gameState.players[gameState.currentPlayer];
+            const leaderOnBoard = findLeaderPosition(gameState.currentPlayer);
+            
+            // If leader hasn't been placed yet
+            if (!leaderOnBoard) {
+                // Only allow selecting the leader card
+                if (card.suit === 'joker') {
+                    gameState.selectedCard = card;
+                    updateUI();
+                } else {
+                    // Prevent selecting regular cards until leader is placed
+                    console.log('Leader must be placed first before other cards');
+                    return;
+                }
+            } else {
+                // Leader is placed, allow selecting any remaining card
+                gameState.selectedCard = card;
+                updateUI();
+            }
+        }
+    } else if (gameState.phase === 'play' && card.owner === gameState.currentPlayer) {
+        // Mobile: Allow selecting cards from hand for summoning when leader hasn't summoned
+        const currentPos = findCardPosition(card);
+        if (!currentPos) {
+            // Card is in hand
+            handleHandCardSelection(card);
         }
     } else if (gameState.phase === 'setup' && gameState.setupStep === 'discard') {
         if (card.owner === gameState.currentPlayer) {
@@ -5425,8 +5522,13 @@ function handleMultiSelection(card, row, col) {
         return; // Can't select exhausted cards for attacks
     }
     
-    // If we have a single card selected, transfer it to multi-selection first
-    if (gameState.selectedCard && gameState.selectedHex) {
+    // Leaders cannot be multi-selected
+    if (card.suit === 'joker') {
+        return; // Leaders can only be selected individually
+    }
+    
+    // If we have a single card selected, transfer it to multi-selection first (unless it's a leader)
+    if (gameState.selectedCard && gameState.selectedHex && gameState.selectedCard.suit !== 'joker') {
         const alreadyInMulti = gameState.selectedCards.some(selected => selected.card.id === gameState.selectedCard.id);
         if (!alreadyInMulti) {
             gameState.selectedCards.push({
@@ -5490,6 +5592,141 @@ function calculateCombinedAttacks() {
         gameState.absorptions = getAbsorptions(firstCard.card, firstCard.position[0], firstCard.position[1]);
     } else {
         gameState.absorptions = [];
+    }
+}
+
+function handleMobileCardSelection(clickedCard, row, col, ctrlKey = false) {
+    // Check if this card is already selected (single selection)
+    const isSameCardSelected = gameState.selectedCard && gameState.selectedCard.id === clickedCard.id;
+    
+    // Check if this card is in multi-selection
+    const isInMultiSelection = gameState.selectedCards.some(selected => selected.card.id === clickedCard.id);
+    
+    if (ctrlKey) {
+        // Desktop behavior: Ctrl+click for multi-selection
+        handleMultiSelection(clickedCard, row, col);
+    } else if (isSameCardSelected && !isMobileMultiSelectMode) {
+        // Mobile: Second tap on same card - enter multi-select mode (unless it's a leader)
+        if (clickedCard.suit === 'joker') {
+            // Leaders cannot enter multi-select mode, just keep single selection
+            return;
+        }
+        isMobileMultiSelectMode = true;
+        // Transfer single selection to multi-selection
+        if (!gameState.selectedCards.some(selected => selected.card.id === clickedCard.id)) {
+            gameState.selectedCards.push({
+                card: clickedCard,
+                position: [row, col]
+            });
+        }
+        // Clear single selection and calculate combined attacks
+        gameState.selectedCard = null;
+        gameState.selectedHex = null;
+        gameState.validMoves = [];
+        calculateCombinedAttacks();
+    } else if (isMobileMultiSelectMode) {
+        // In multi-select mode - toggle card in selection
+        handleMultiSelection(clickedCard, row, col);
+    } else {
+        // Regular first tap - single select (clear others first)
+        exitMobileMultiSelectMode();
+        clearSelection();
+        selectCard(clickedCard, row, col);
+    }
+}
+
+function exitMobileMultiSelectMode() {
+    isMobileMultiSelectMode = false;
+}
+
+function handleHandCardSelection(card) {
+    // Check if leader can summon (hasn't summoned this turn)
+    const leaderPos = findLeaderPosition(gameState.currentPlayer);
+    if (!leaderPos) {
+        console.log('Cannot select hand card: Leader not on board');
+        return;
+    }
+    
+    if (gameState.leaderAttackedThisTurn) {
+        console.log('Cannot select hand card: Leader already used this turn');
+        return;
+    }
+    
+    // Clear any existing selection
+    clearSelection();
+    
+    // Select the hand card and show valid summoning positions
+    gameState.selectedCard = card;
+    
+    // Show valid summoning positions (mimicking drag behavior)
+    const mapCounts = countCardsOnMap(gameState.currentPlayer);
+    const isAtMaxCapacity = mapCounts.leaderCount >= 1 && mapCounts.regularCards >= 5;
+    const neighbors = getHexNeighbors(leaderPos[0], leaderPos[1]);
+    
+    if (isAtMaxCapacity) {
+        // At max capacity - only show positions with existing cards to replace
+        gameState.validMoves = neighbors.filter(([r, c]) => {
+            const existingCard = gameState.board[r][c];
+            return existingCard && existingCard.owner === gameState.currentPlayer;
+        });
+        // All valid moves will result in discarding the existing card
+        validDiscards = [...gameState.validMoves];
+    } else {
+        // Not at max - show all valid summoning positions (empty or own cards)
+        gameState.validMoves = neighbors.filter(([r, c]) => {
+            const existingCard = gameState.board[r][c];
+            return !existingCard || existingCard.owner === gameState.currentPlayer;
+        });
+        // Only positions with existing friendly cards will be discarded
+        validDiscards = neighbors.filter(([r, c]) => {
+            const existingCard = gameState.board[r][c];
+            return existingCard && existingCard.owner === gameState.currentPlayer;
+        });
+    }
+    
+    // Clear other action arrays since this is for summoning only
+    gameState.validAttacks = [];
+    gameState.blockedMoves = [];
+    gameState.absorptions = [];
+    
+    updateCanvas();
+    updateUI();
+}
+
+function handleHandCardSummoning(row, col) {
+    const selectedCard = gameState.selectedCard;
+    if (!selectedCard) return;
+    
+    // Validate summoning position
+    if (gameState.validMoves.some(([r, c]) => r === row && c === col)) {
+        const existingCard = gameState.board[row][col];
+        
+        // Can summon to empty positions or positions with your own cards
+        if (!existingCard || existingCard.owner === gameState.currentPlayer) {
+            // Save state before summoning for undo functionality
+            saveStateToHistory();
+            
+            // Log the action type for clarity
+            if (existingCard) {
+                console.log(`Replacing ${existingCard.value}${existingCard.suit} with ${selectedCard.value}${selectedCard.suit} via mobile tap`);
+            } else {
+                console.log(`Summoning ${selectedCard.value}${selectedCard.suit} to empty position via mobile tap`);
+            }
+            
+            // Try to summon the card (placeCard will handle replacement)
+            const placementSuccessful = placeCard(selectedCard, row, col);
+            if (placementSuccessful) {
+                gameState.leaderAttackedThisTurn = true; // Mark leader as used for summoning
+                console.log('Card summoned/replaced successfully via mobile tap');
+                clearSelection(); // Clear selection after successful summoning
+            } else {
+                console.log('Failed to summon/replace card via mobile tap');
+            }
+        } else {
+            console.log('Cannot summon: Position occupied by enemy card');
+        }
+    } else {
+        console.log('Cannot summon: Invalid summoning position (not adjacent to leader or leader already used)');
     }
 }
 
@@ -5656,9 +5893,11 @@ function performCombinedAttack(targetRow, targetCol) {
                 gameState.board[targetRow][targetCol] = null;
             }
         } else {
-            // Defender survives - mark as exhausted
-            gameState.cardsAttackedThisTurn.add(actualDefender.id);
-            gameState.cardsMovedThisTurn.add(actualDefender.id); // Mark as exhausted
+            // Defender survives - mark as exhausted (unless it's a leader)
+            if (actualDefender.suit !== 'joker') {
+                gameState.cardsAttackedThisTurn.add(actualDefender.id);
+                gameState.cardsMovedThisTurn.add(actualDefender.id); // Mark as exhausted
+            }
         }
         
         // Handle counter-attack against all attackers
@@ -5684,6 +5923,16 @@ function performCombinedAttack(targetRow, targetCol) {
         }
     }
     
+    // Mark all involved cards (attackers and defender) as exhausted for 3 turns total
+    // They will be exhausted until turn: current turn + 2
+    const exhaustionEndTurn = gameState.turn + 2;
+    for (const selected of gameState.selectedCards) {
+        gameState.cardsAttackExhaustion.set(selected.card.id, exhaustionEndTurn);
+    }
+    if (actualDefender && actualDefender.suit !== 'joker') {
+        gameState.cardsAttackExhaustion.set(actualDefender.id, exhaustionEndTurn);
+    }
+    
     // SAFETY: Validate leaders are still on map after combined attack
     if (gameState.phase === 'play') {
         validateLeadersOnMap();
@@ -5697,7 +5946,12 @@ function performCombinedAttack(targetRow, targetCol) {
 function isCardExhausted(card) {
     const hasMoved = gameState.cardsMovedThisTurn.has(card.id);
     const hasAttacked = gameState.cardsAttackedThisTurn.has(card.id);
-    return hasMoved && hasAttacked;
+    
+    // Check if card is exhausted from previous attack (3-turn exhaustion)
+    const attackExhaustionEndTurn = gameState.cardsAttackExhaustion.get(card.id);
+    const isAttackExhausted = attackExhaustionEndTurn && gameState.turn <= attackExhaustionEndTurn;
+    
+    return (hasMoved && hasAttacked) || isAttackExhausted;
 }
 
 // Game logic
@@ -5729,6 +5983,15 @@ function clearSelection() {
     gameState.validAttacks = [];
     gameState.blockedMoves = [];
     gameState.absorptions = [];
+    validDiscards = []; // Clear discard markers
+    
+    // Clear mobile hover state
+    if (isMobileHovering) {
+        clearMobileHover();
+    }
+    
+    // Exit mobile multi-select mode
+    exitMobileMultiSelectMode();
     
     // Update cursor after clearing selection
     if (hoveredHex) {
@@ -5738,6 +6001,11 @@ function clearSelection() {
 
 function getValidMoves(card, row, col) {
     const moves = [];
+    
+    // If card is exhausted (including 3-turn attack exhaustion), no valid moves
+    if (isCardExhausted(card)) {
+        return moves;
+    }
     
     // If card has already moved this turn, no valid moves
     if (gameState.cardsMovedThisTurn.has(card.id)) {
@@ -5839,6 +6107,12 @@ function getBlockedMoves(card, row, col) {
 
 function getValidAttacks(card, row, col) {
     const attacks = [];
+    
+    // If card is exhausted (including 3-turn attack exhaustion), no valid attacks
+    if (isCardExhausted(card)) {
+        return attacks;
+    }
+    
     if (gameState.cardsAttackedThisTurn.has(card.id)) {
         return attacks;
     }
@@ -5961,6 +6235,13 @@ function isAttackBlocked(fromRow, fromCol, toRow, toCol) {
 function moveCard(fromRow, fromCol, toRow, toCol) {
     const card = gameState.board[fromRow][fromCol];
     
+    // SAFETY: Check if card is exhausted
+    if (isCardExhausted(card)) {
+        console.error('CRITICAL ERROR: Attempted to move exhausted card! This should never happen!');
+        console.error('Movement blocked to maintain game integrity');
+        return; // Abort the move
+    }
+    
     // SAFETY: Leaders can never be captured by movement!
     if (gameState.board[toRow][toCol] && gameState.board[toRow][toCol].suit === 'joker') {
         console.error('CRITICAL ERROR: Attempted to move onto leader position! This should never happen!');
@@ -5980,6 +6261,13 @@ function attack(fromRow, fromCol, toRow, toCol) {
     const defender = gameState.board[toRow][toCol];
     
     if (!defender) return;
+    
+    // SAFETY: Check if attacker is exhausted
+    if (isCardExhausted(attacker)) {
+        console.error('CRITICAL ERROR: Attempted to attack with exhausted card! This should never happen!');
+        console.error('Attack blocked to maintain game integrity');
+        return; // Abort the attack
+    }
     
     // Safety check: prevent attacking your own cards
     if (defender.owner === attacker.owner) {
@@ -6066,9 +6354,11 @@ function attack(fromRow, fromCol, toRow, toCol) {
                 gameState.board[toRow][toCol] = null;
             }
         } else {
-            // Defender survives - mark as exhausted
-            gameState.cardsAttackedThisTurn.add(actualDefender.id);
-            gameState.cardsMovedThisTurn.add(actualDefender.id); // Mark as exhausted
+            // Defender survives - mark as exhausted (unless it's a leader)
+            if (actualDefender.suit !== 'joker') {
+                gameState.cardsAttackedThisTurn.add(actualDefender.id);
+                gameState.cardsMovedThisTurn.add(actualDefender.id); // Mark as exhausted
+            }
         }
         
         if (attackerDestroyed) {
@@ -6094,6 +6384,14 @@ function attack(fromRow, fromCol, toRow, toCol) {
     
     // Mark card as attacked
     gameState.cardsAttackedThisTurn.add(attacker.id);
+    
+    // Mark all involved cards (attacker and defender) as exhausted for 3 turns total
+    // They will be exhausted until turn: current turn + 2
+    const exhaustionEndTurn = gameState.turn + 2;
+    gameState.cardsAttackExhaustion.set(attacker.id, exhaustionEndTurn);
+    if (actualDefender && actualDefender.suit !== 'joker') {
+        gameState.cardsAttackExhaustion.set(actualDefender.id, exhaustionEndTurn);
+    }
     
     // SAFETY: Validate leaders are still on map after single attack
     if (gameState.phase === 'play') {
@@ -6194,6 +6492,28 @@ function findLeaderPosition(player) {
     return null;
 }
 
+function autoSelectLeaderForSetup(player) {
+    // Only auto-select for human players
+    if (aiEnabled[player]) {
+        console.log(`Skipping auto-select for AI Player ${player}`);
+        return false;
+    }
+    
+    // Find the leader card in the player's hand
+    const playerData = gameState.players[player];
+    const leaderCard = playerData.hand.find(card => card.suit === 'joker');
+    
+    if (leaderCard) {
+        gameState.selectedCard = leaderCard;
+        console.log(`Auto-selected leader for human Player ${player}`);
+        updateUI();
+        return true;
+    } else {
+        console.log(`No leader found in Player ${player}'s hand`);
+        return false;
+    }
+}
+
 function determineFirstPlayer() {
     // Count cards on battlefield
     let p1Cards = 0, p2Cards = 0;
@@ -6220,6 +6540,14 @@ function determineFirstPlayer() {
 function startNewTurn() {
     // No need for skew/rotation logic - exhaustion is tracked by action sets
     
+    // Clear mobile hover state at start of new turn
+    if (isMobileHovering) {
+        clearMobileHover();
+    }
+    
+    // Exit mobile multi-select mode at start of new turn
+    exitMobileMultiSelectMode();
+    
     // Draw to 5 cards
     const playerData = gameState.players[gameState.currentPlayer];
     while (playerData.hand.length < 5 && playerData.deck.length > 0) {
@@ -6229,6 +6557,14 @@ function startNewTurn() {
     // Reset turn-specific state
     gameState.cardsMovedThisTurn.clear();
     gameState.cardsAttackedThisTurn.clear();
+    
+    // Clean up expired attack exhaustion entries
+    for (const [cardId, endTurn] of gameState.cardsAttackExhaustion.entries()) {
+        if (gameState.turn > endTurn) {
+            gameState.cardsAttackExhaustion.delete(cardId);
+        }
+    }
+    
     gameState.leaderAttackedThisTurn = false;
     
     // Clear undo history at start of new turn
@@ -6280,8 +6616,16 @@ function toggleGamePhase() {
         gameState.absorptions = [];
         gameState.cardsMovedThisTurn.clear();
         gameState.cardsAttackedThisTurn.clear();
+        gameState.cardsAttackExhaustion.clear();
         gameState.leaderAttackedThisTurn = false;
         showSetupCaption();
+        
+        // Auto-select leader for the current player if they haven't placed their leader yet
+        const leaderOnBoard = findLeaderPosition(gameState.currentPlayer);
+        if (!leaderOnBoard) {
+            autoSelectLeaderForSetup(gameState.currentPlayer);
+        }
+        
         console.log('Switched to Setup phase');
     }
     
@@ -6330,6 +6674,13 @@ function endTurn() {
         updateMapRotation();
         
         clearSelection();
+        
+        // Auto-select leader for the new current player if they haven't placed their leader yet
+        const leaderOnBoard = findLeaderPosition(gameState.currentPlayer);
+        if (!leaderOnBoard) {
+            autoSelectLeaderForSetup(gameState.currentPlayer);
+        }
+        
         updateCanvas();
         updateUI();
         
@@ -6505,16 +6856,23 @@ function updateCanvas() {
                         }
                     }
                 }
+                
+                // Draw X mark for cards that will be discarded during mobile hand card selection
+                const isDiscardable = validDiscards.some(([r, c]) => r === row && c === col);
+                if (isDiscardable) {
+                    drawDiscardSymbol(pos.x, pos.y);
+                }
             }
             
-            // Draw coordinate display or blocked symbol on hovered hex only if not occupied
-            if (hoveredHex && hoveredHex[0] === row && hoveredHex[1] === col && !card) {
-                // Check if this is a blocked move
-                if (gameState.blockedMoves.some(([r, c]) => r === row && c === col)) {
-                    drawBlockedSymbol(pos.x, pos.y);
-                } else {
-                    drawCoordinateOnGrid(pos.x, pos.y, col, row);
-                }
+            // Draw blocked symbol for blocked moves when a card is selected
+            if (!card && gameState.selectedCard && gameState.blockedMoves.some(([r, c]) => r === row && c === col)) {
+                drawBlockedSymbol(pos.x, pos.y);
+            }
+            
+            // Draw coordinate display on hovered hex only if not occupied and not showing blocked symbol
+            if (hoveredHex && hoveredHex[0] === row && hoveredHex[1] === col && !card && 
+                !(gameState.selectedCard && gameState.blockedMoves.some(([r, c]) => r === row && c === col))) {
+                drawCoordinateOnGrid(pos.x, pos.y, col, row);
             }
         }
     }
@@ -6663,6 +7021,8 @@ function updateUI() {
         if (gameState.selectedCards && gameState.selectedCards.length > 0) {
             const totalAttack = gameState.selectedCards.reduce((sum, selected) => sum + selected.card.attack, 0);
             turnInfo += ` | 🔥 MULTI-SELECT: ${gameState.selectedCards.length} cards (${totalAttack} power) 🔥`;
+        } else if (isMobileMultiSelectMode) {
+            turnInfo += ` | 📱 TAP MORE CARDS FOR MULTI-SELECT`;
         }
     }
     
@@ -6850,6 +7210,7 @@ function resetGame() {
         leaderAttackedThisTurn: false,
         cardsMovedThisTurn: new Set(),
         cardsAttackedThisTurn: new Set(),
+        cardsAttackExhaustion: new Map(), // Maps card.id -> turn number when attack exhaustion ends
         moveCount: 1, // Track total moves for aggressor rule
         firstPlayer: 1 // Track who had the first turn (aggressor)
     };
@@ -7267,6 +7628,16 @@ function handleTouchEnd(e) {
         
         // If touch was short and didn't move much, treat as click
         if (touchDuration < 300 && touchDistance < 10 && touchStartPos) {
+            // First check if this should be handled as mobile attack hover
+            const coords = getCanvasCoordinates({ clientX: touchStartPos.x, clientY: touchStartPos.y });
+            const hex = pixelToHex(coords.x, coords.y);
+            
+            if (hex && handleMobileTap(hex.row, hex.col)) {
+                // Mobile tap was handled (hover activated), don't proceed with normal click
+                return;
+            }
+            
+            // Normal click handling
             const clickEvent = new MouseEvent('click', {
                 clientX: touchStartPos.x,
                 clientY: touchStartPos.y
@@ -7296,6 +7667,60 @@ function getTouchDistance(touch1, touch2) {
         Math.pow(touch2.clientX - touch1.clientX, 2) + 
         Math.pow(touch2.clientY - touch1.clientY, 2)
     );
+}
+
+// Mobile attack hover functionality
+function handleMobileTap(row, col) {
+    // Only handle tap-to-hover during attack scenarios
+    if (gameState.phase !== 'play' || !gameState.validAttacks || gameState.validAttacks.length === 0) {
+        return false; // Not in attack mode, let normal click handling proceed
+    }
+    
+    const isValidAttackTarget = gameState.validAttacks.some(([r, c]) => r === row && c === col);
+    
+    if (isValidAttackTarget) {
+        // If tapping on a valid attack target
+        if (isMobileHovering && mobileHoveredHex && 
+            mobileHoveredHex[0] === row && mobileHoveredHex[1] === col) {
+            // Second tap on same target - perform the attack
+            clearMobileHover();
+            return false; // Let normal attack handling proceed
+        } else {
+            // First tap - show hover preview
+            setMobileHover(row, col);
+            return true; // Consume the tap, don't perform action yet
+        }
+    } else if (isMobileHovering) {
+        // Tapping elsewhere while hovering - clear hover
+        clearMobileHover();
+        return false; // Let normal click handling proceed
+    }
+    
+    return false; // Not an attack scenario, let normal handling proceed
+}
+
+function setMobileHover(row, col) {
+    mobileHoveredHex = [row, col];
+    isMobileHovering = true;
+    
+    // Set the same hover state as mouse hover
+    hoveredHex = [row, col];
+    hoveredAttackTarget = [row, col];
+    attackPreviewResults = calculateAttackResults(row, col);
+    
+    updateCanvas();
+}
+
+function clearMobileHover() {
+    mobileHoveredHex = null;
+    isMobileHovering = false;
+    
+    // Clear hover state
+    hoveredHex = null;
+    hoveredAttackTarget = null;
+    attackPreviewResults = null;
+    
+    updateCanvas();
 }
 
 function countCardsOnMap(player) {
