@@ -107,6 +107,124 @@ function hasAnyAI() {
     return aiEnabled[1] || aiEnabled[2];
 }
 
+// Check if both players are AI (Bot vs Bot mode)
+function isBotVsBot() {
+    return aiEnabled[1] && aiEnabled[2];
+}
+
+// Screen Wake Lock Management for AI vs AI mode
+let wakeLock = null;
+let wakeLockSupported = 'wakeLock' in navigator;
+
+async function requestWakeLock() {
+    if (!wakeLockSupported) {
+        console.log('Wake Lock API not supported, using fallback methods');
+        return false;
+    }
+    
+    try {
+        wakeLock = await navigator.wakeLock.request('screen');
+        console.log('Screen wake lock activated for AI vs AI mode');
+        
+        wakeLock.addEventListener('release', () => {
+            console.log('Screen wake lock released');
+        });
+        
+        return true;
+    } catch (err) {
+        console.error('Failed to request wake lock:', err);
+        return false;
+    }
+}
+
+async function releaseWakeLock() {
+    if (wakeLock) {
+        try {
+            await wakeLock.release();
+            wakeLock = null;
+            console.log('Screen wake lock manually released');
+        } catch (err) {
+            console.error('Failed to release wake lock:', err);
+        }
+    }
+}
+
+// Fallback method for keeping screen awake (for browsers without Wake Lock API)
+let keepAliveInterval = null;
+
+function startKeepAlive() {
+    if (keepAliveInterval) return;
+    
+    // Create a tiny invisible video to keep screen active
+    const video = document.createElement('video');
+    video.style.position = 'absolute';
+    video.style.top = '-1px';
+    video.style.left = '-1px';
+    video.style.width = '1px';
+    video.style.height = '1px';
+    video.style.opacity = '0.01';
+    video.muted = true;
+    video.loop = true;
+    video.autoplay = true;
+    video.id = 'keepAliveVideo';
+    
+    // Create a minimal video source (1x1 pixel, 1 second duration)
+    const canvas = document.createElement('canvas');
+    canvas.width = 1;
+    canvas.height = 1;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(0, 0, 1, 1);
+    
+    canvas.toBlob((blob) => {
+        const url = URL.createObjectURL(blob);
+        video.src = url;
+        document.body.appendChild(video);
+        
+        video.play().catch(e => console.log('Fallback keep-alive video failed:', e));
+    });
+    
+    // Additional fallback: periodic no-op to prevent sleep
+    keepAliveInterval = setInterval(() => {
+        // Trigger a minimal DOM operation to show activity
+        document.body.style.background = document.body.style.background;
+    }, 30000); // Every 30 seconds
+    
+    console.log('Started fallback keep-alive methods');
+}
+
+function stopKeepAlive() {
+    if (keepAliveInterval) {
+        clearInterval(keepAliveInterval);
+        keepAliveInterval = null;
+    }
+    
+    const video = document.getElementById('keepAliveVideo');
+    if (video) {
+        video.remove();
+    }
+    
+    console.log('Stopped fallback keep-alive methods');
+}
+
+// Main function to manage screen wake lock based on AI mode
+async function updateScreenWakeLock() {
+    if (isBotVsBot() && gameState.phase === 'play') {
+        // AI vs AI in play mode - keep screen awake
+        if (!wakeLock) {
+            const success = await requestWakeLock();
+            if (!success) {
+                // Fallback for browsers without Wake Lock API
+                startKeepAlive();
+            }
+        }
+    } else {
+        // Not AI vs AI or not in play mode - release wake lock
+        await releaseWakeLock();
+        stopKeepAlive();
+    }
+}
+
 // Update map flipping based on AI presence
 function updateMapFlippingForAI() {
     // Map flipping logic:
@@ -169,6 +287,9 @@ function toggleAIPlayer(player) {
     
     // Automatically update map flipping based on AI presence
     updateMapFlippingForAI();
+    
+    // Update screen wake lock for AI vs AI mode
+    updateScreenWakeLock();
     
     // Update all AI button texts (both need to show map rotation status)
     updateAllAIButtons();
@@ -3405,12 +3526,9 @@ function loadGameState() {
             if (parsedState.mapFlippingEnabled !== undefined) {
                 mapFlippingEnabled = parsedState.mapFlippingEnabled;
             }
-            // Restore AI player settings
-            if (parsedState.aiEnabled !== undefined) {
-                aiEnabled = parsedState.aiEnabled;
-                // Update map flipping based on AI presence (overrides saved mapFlippingEnabled)
-                updateMapFlippingForAI();
-            }
+            // AI player settings are NOT restored from saved state
+            // They always default to P1 human vs P2 AI on page reload
+            // (AI settings are preserved only within the same session via "New Game")
             // Restore zoom level and map position
             if (parsedState.zoomLevel !== undefined) {
                 zoomLevel = parsedState.zoomLevel;
@@ -4707,7 +4825,7 @@ function showPlayerWinCaption(player) {
 }
 
 // Game initialization
-function initGame() {
+function initGame(preserveAISettings = false) {
     // Initialize canvas
     canvas = document.getElementById('hex-canvas');
     ctx = canvas.getContext('2d');
@@ -4743,6 +4861,14 @@ function initGame() {
     handContainer.addEventListener('dragover', handleHandDragOver);
     handContainer.addEventListener('drop', handleHandDrop);
     
+    // Only reset AI settings on page load, not during "New Game"
+    if (!preserveAISettings) {
+        aiEnabled = { 1: false, 2: true };
+        console.log('Page loaded: Defaulting to P1 human vs P2 AI');
+    } else {
+        console.log('New Game: Preserving current AI settings:', aiEnabled);
+    }
+    
     // Try to load saved game state
     const savedState = loadGameState();
     if (savedState) {
@@ -4751,12 +4877,10 @@ function initGame() {
         if (!gameState.selectedCards) {
             gameState.selectedCards = [];
         }
-        console.log('Loaded saved game state');
+        console.log('Loaded saved game state (AI settings remain as default)');
     } else {
-        // Create new game with default AI settings: P1 human vs P2 AI
-        aiEnabled = { 1: false, 2: true };
-        console.log('Starting new game with default: P1 human vs P2 AI');
-        
+        // Create new game
+        console.log('No saved state found, creating new game with default AI settings');
         // Create decks for both players (40 cards each: A-10 of 4 suits)
         const deck1 = createDeck();
         const deck2 = createDeck();
@@ -5152,6 +5276,7 @@ function handleSetupClick(row, col) {
                 gameState.currentPlayer = determineFirstPlayer();
                 console.log(`First player determined: ${gameState.currentPlayer}, AI enabled: ${aiEnabled[gameState.currentPlayer]}`);
                 updateMapRotation(); // Set map rotation for play mode
+                updateScreenWakeLock(); // Activate wake lock for AI vs AI mode
                 showBattleCaption();
                 setTimeout(() => {
                     showPlayerTurnCaption(gameState.currentPlayer);
@@ -5280,6 +5405,7 @@ function handleCardClick(card) {
                     gameState.currentPlayer = determineFirstPlayer();
                     console.log(`First player determined: ${gameState.currentPlayer}, AI enabled: ${aiEnabled[gameState.currentPlayer]}`);
                     updateMapRotation(); // Set map rotation for play mode
+                    updateScreenWakeLock(); // Activate wake lock for AI vs AI mode
                     showBattleCaption();
                     setTimeout(() => {
                         showPlayerTurnCaption(gameState.currentPlayer);
@@ -5977,6 +6103,7 @@ function attack(fromRow, fromCol, toRow, toCol) {
     // Check win condition
     if (gameState.players[attacker.owner].captured.length >= 10) {
         gameState.phase = 'end';
+        updateScreenWakeLock(); // Release wake lock when game ends
         showPlayerWinCaption(attacker.owner);
         setTimeout(() => {
             alert(`Player ${attacker.owner} wins!`);
@@ -6161,6 +6288,9 @@ function toggleGamePhase() {
     updateUI();
     saveGameState();
     
+    // Update screen wake lock based on new phase
+    updateScreenWakeLock();
+    
     // Close menu after phase toggle
     const menuOptions = document.getElementById('menu-options');
     if (menuOptions && !menuOptions.classList.contains('hidden')) {
@@ -6238,6 +6368,7 @@ function checkAggressorRule() {
         const winReason = `Player ${winner} wins! First player (Player ${aggressor}) loses after 100 moves without decisive captures.`;
         
         gameState.phase = 'end';
+        updateScreenWakeLock(); // Release wake lock when game ends
         console.log(`Game ended by 100-move aggressor rule. ${winReason}`);
         
         // Display win message
@@ -6726,12 +6857,15 @@ function resetGame() {
     // Clear undo history when resetting
     gameHistory = [];
     
-    // Reset AI settings to default: P1 human vs P2 AI
-    aiEnabled = { 1: false, 2: true };
+    // Note: AI settings (aiEnabled) are preserved during "New Game"
+    // They only reset to default on page reload
     
     clearSavedGame(); // Clear saved game when resetting
-    initGame();
+    initGame(true); // Preserve AI settings during New Game
     showSetupCaption();
+    
+    // Update wake lock for new game (will be released since phase is 'setup')
+    updateScreenWakeLock();
     
     // Close menu after reset
     const menuOptions = document.getElementById('menu-options');
@@ -6745,7 +6879,11 @@ document.addEventListener('DOMContentLoaded', () => {
     initGame();
 });
 
-
+// Clean up wake lock when page unloads
+window.addEventListener('beforeunload', () => {
+    releaseWakeLock();
+    stopKeepAlive();
+});
 
 // Handle window resize
 window.addEventListener('resize', () => {
@@ -7097,18 +7235,30 @@ function handleTouchMove(e) {
         // Handle pinch zoom
         const currentDistance = getTouchDistance(e.touches[0], e.touches[1]);
         
-        if (lastTouchDistance) {
+        if (lastTouchDistance && Math.abs(currentDistance - lastTouchDistance) > 2) {
+            // Calculate zoom factor based on distance change, but make it slower
             const distanceRatio = currentDistance / lastTouchDistance;
-            const zoomFactor = distanceRatio > 1 ? 1.02 : 0.98;
+            
+            // Slow down the zoom rate by reducing the effect of distance changes
+            const zoomSensitivity = 0.3; // Lower value = slower zoom
+            let zoomFactor = 1 + (distanceRatio - 1) * zoomSensitivity;
+            
+            // Clamp the zoom factor to prevent too fast changes
+            zoomFactor = Math.max(0.95, Math.min(1.05, zoomFactor));
             
             // Apply zoom
+            const oldZoomLevel = zoomLevel;
             zoomLevel *= zoomFactor;
             zoomLevel = Math.max(0.5, Math.min(3.0, zoomLevel));
-            hexSize = baseHexSize * zoomLevel;
-            hexWidth = hexSize * 2;
-            hexHeight = hexSize * Math.sqrt(3);
             
-            drawGame();
+            // Only redraw if zoom actually changed significantly
+            if (Math.abs(zoomLevel - oldZoomLevel) > 0.005) {
+                hexSize = baseHexSize * zoomLevel;
+                hexWidth = hexSize * 2;
+                hexHeight = hexSize * Math.sqrt(3);
+                
+                drawGame();
+            }
         }
         
         lastTouchDistance = currentDistance;
