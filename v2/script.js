@@ -82,12 +82,13 @@ function getCardForAI(card, aiPlayer) {
     // AI can only see face up cards of enemies
     if (card.faceDown && card.owner !== aiPlayer) {
         // Return a generic face down card representation for AI
+        // Assume face-down cards are moderate threats that should be revealed
         return {
             ...card,
             value: '?',
             suit: 'unknown',
-            attack: 1, // Estimate average attack
-            defense: 1, // Estimate average defense
+            attack: 3, // Assume higher attack to encourage proactive elimination
+            defense: 3, // Assume higher defense to encourage combined attacks
             isAIHidden: true
         };
     }
@@ -744,15 +745,20 @@ function performAITurnSequence(player) {
         return;
     }
 
-    // Priority 3: Combined attacks - Use multiple cards to capture strong enemies
+    // Priority 3: Combined attacks - Use multiple cards to capture strong enemies and reveal face-down threats
     updateAIThinking('Planning combined attacks...', 5);
     const combinedAttackAction = findBestCombinedAttack(player, isNearMoveLimit, isAggressor);
     if (combinedAttackAction) {
         const actionKey = `combined-attack-${combinedAttackAction.target.row}-${combinedAttackAction.target.col}-${combinedAttackAction.combSize}`;
         
         if (lastAIAction !== actionKey) {
-            updateAIThinking(`Combined attack: ${combinedAttackAction.combSize} cards!`, 6);
-            console.log(`AI Player ${player} combined attack: ${combinedAttackAction.combSize} cards attacking ${combinedAttackAction.target.card.value}${combinedAttackAction.target.card.suit} at (${combinedAttackAction.target.row},${combinedAttackAction.target.col}) - Total attack: ${combinedAttackAction.totalAttack} vs ${combinedAttackAction.targetDefense}`);
+            const faceDownText = combinedAttackAction.target.card.faceDown ? " [FEARLESS FACE-DOWN ASSAULT]" : "";
+            if (combinedAttackAction.target.card.faceDown) {
+                updateAIThinking(`Fearless assault on face-down threat!`, 6);
+            } else {
+                updateAIThinking(`Combined attack: ${combinedAttackAction.combSize} cards!`, 6);
+            }
+            console.log(`AI Player ${player} combined attack: ${combinedAttackAction.combSize} cards attacking ${combinedAttackAction.target.card.value}${combinedAttackAction.target.card.suit} at (${combinedAttackAction.target.row},${combinedAttackAction.target.col}) - Total attack: ${combinedAttackAction.totalAttack} vs ${combinedAttackAction.targetDefense}${faceDownText}`);
             lastAIAction = actionKey;
             aiActionCount.set(turnKey, actionsThisTurn + 1);
             saveStateToHistory();
@@ -781,8 +787,19 @@ function performAITurnSequence(player) {
             return;
         }
         
+        const target = gameState.board[attackAction.toRow][attackAction.toCol];
         const captureText = attackAction.expectedCapture ? " [CAPTURE]" : " [DAMAGE]";
-        console.log(`AI Player ${player} attacking with ${attackAction.card.value}${attackAction.card.suit} at (${attackAction.fromRow},${attackAction.fromCol}) -> (${attackAction.toRow},${attackAction.toCol})${captureText}`);
+        const faceDownText = target?.faceDown ? " [REVEAL FACE-DOWN]" : "";
+        const fearlessText = attackAction.isFaceDownOverride ? " [FEARLESS OVERRIDE]" : "";
+        const attackerFaceDownText = attackAction.card.faceDown ? " [FACE-DOWN ATTACKER]" : "";
+        
+        if (target?.faceDown) {
+            updateAIThinking('Fearlessly attacking face-down threat!', 6);
+        } else if (attackAction.card.faceDown) {
+            updateAIThinking('Using face-down card to attack!', 6);
+        }
+        
+        console.log(`AI Player ${player} attacking with ${attackAction.card.value}${attackAction.card.suit} at (${attackAction.fromRow},${attackAction.fromCol}) -> (${attackAction.toRow},${attackAction.toCol})${captureText}${faceDownText}${fearlessText}${attackerFaceDownText}`);
         lastAIAction = actionKey;
         aiActionCount.set(turnKey, actionsThisTurn + 1);
         saveStateToHistory();
@@ -1203,17 +1220,21 @@ function findBestAttackAction(player, isNearMoveLimit = false, isAggressor = fal
                 // PRIMARY: Capture probability and value
                 const canCapture = card.attack >= target.defense;
                 if (canCapture) {
-                    // MASSIVE bonus for guaranteed captures
-                    let captureBonus = 100;
-                    
-                    // If approaching move limit and we're the aggressor, be extra aggressive about captures
-                    if (isNearMoveLimit && isAggressor) {
-                        captureBonus += 200; // Aggressor needs to win by captures
-                    }
-                    
-                    score += captureBonus;
-                    
-                    // Bonus based on captured card value
+                // MASSIVE bonus for guaranteed captures
+                let captureBonus = 100;
+                
+                // If approaching move limit and we're the aggressor, be extra aggressive about captures
+                if (isNearMoveLimit && isAggressor) {
+                    captureBonus += 200; // Aggressor needs to win by captures
+                }
+                
+                // STRATEGIC: Extra bonus for attacking face-down cards (reveal and disable them)
+                if (target.faceDown) {
+                    captureBonus += 150; // Strong bonus for revealing face-down cards
+                    console.log(`[AI DEBUG] Face-down card attack bonus: +150 for revealing unknown threat`);
+                }
+                
+                score += captureBonus;                    // Bonus based on captured card value
                     const captureValue = target.attack + target.defense;
                     score += captureValue * 10;
                     
@@ -1230,6 +1251,13 @@ function findBestAttackAction(player, isNearMoveLimit = false, isAggressor = fal
                     // Even if we can't capture, weakening enemy cards has value
                     const damageDealt = Math.min(card.attack, target.defense);
                     score += damageDealt * 5; // Smaller bonus for damage
+                    
+                    // STRATEGIC: Extra bonus for attacking face-down cards even if we can't capture them
+                    // This reveals them and potentially weakens unknown threats
+                    if (target.faceDown) {
+                        score += 75; // Good bonus for revealing face-down cards even without capture
+                        console.log(`[AI DEBUG] Face-down reveal bonus: +75 for attacking to reveal unknown card`);
+                    }
                 }
 
                 // DEFENSE: Prioritize saving our own cards under threat
@@ -1262,6 +1290,10 @@ function findBestAttackAction(player, isNearMoveLimit = false, isAggressor = fal
                 const wouldBeSafeAfterAttack = !willCardBeThreatenedAtPosition(card, targetRow, targetCol, player);
                 if (wouldBeSafeAfterAttack) {
                     score += 20; // Bonus for safe attacks
+                } else if (target.faceDown) {
+                    // FEARLESS: Don't penalize risky attacks on face-down cards - the intelligence value is worth it
+                    score += 10; // Small bonus even for risky face-down attacks (revelation is strategic)
+                    console.log(`[AI DEBUG] Fearless face-down attack: accepting risk to reveal unknown threat`);
                 }
 
                 // Add strategic randomization to make AI less predictable
@@ -1280,6 +1312,39 @@ function findBestAttackAction(player, isNearMoveLimit = false, isAggressor = fal
                         expectedCapture: canCapture,
                         targetValue: target.attack + target.defense
                     };
+                }
+            }
+        }
+    }
+
+    // FEARLESS OVERRIDE: If we found a face-down attack but it scored lower than a face-up attack,
+    // consider if the face-down attack is still worth doing for intelligence gathering
+    if (bestAttack && !bestAttack.target?.faceDown) {
+        // Look for any face-down attack opportunity that might have been scored lower
+        for (let r = 0; r < 11; r++) {
+            for (let c = 0; c < 11; c++) {
+                const card = gameState.board[r][c];
+                if (card && card.owner === player && !isCardExhausted(card) && card.attack > 0) {
+                    const validAttacks = getValidAttacks(card, r, c);
+                    for (const [targetRow, targetCol] of validAttacks) {
+                        const target = gameState.board[targetRow][targetCol];
+                        if (target && target.owner !== player && target.faceDown) {
+                            // Found a face-down target - if it has decent capture potential, consider it
+                            if (card.attack >= target.defense && bestScore < 300) {
+                                console.log(`[AI DEBUG] FEARLESS OVERRIDE: Prioritizing face-down capture over lower-scoring face-up attack`);
+                                return {
+                                    card,
+                                    fromRow: r,
+                                    fromCol: c,
+                                    toRow: targetRow,
+                                    toCol: targetCol,
+                                    expectedCapture: true,
+                                    targetValue: target.attack + target.defense,
+                                    isFaceDownOverride: true
+                                };
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -1349,6 +1414,18 @@ function findBestCombinedAttack(player, isNearMoveLimit = false, isAggressor = f
                         score += 300; // Huge bonus for enabling impossible captures
                     }
                     
+                    // STRATEGIC: HUGE bonus for combined attacks on face-down cards
+                    if (target.card.faceDown) {
+                        score += 400; // Massive bonus for using multiple cards to reveal and disable face-down threats
+                        console.log(`[AI DEBUG] Face-down combined attack bonus: +400 for revealing unknown threat with ${combSize} cards`);
+                        
+                        // Additional bonus if this requires multiple cards when single cards couldn't do it
+                        if (singleCardCantCapture) {
+                            score += 200; // Extra bonus for coordinated assault on hidden threats
+                            console.log(`[AI DEBUG] Face-down coordinated assault bonus: +200 for multi-card reveal`);
+                        }
+                    }
+                    
                     // Bonus based on target value
                     const targetValue = target.card.attack + target.card.defense;
                     score += targetValue * 15;
@@ -1375,8 +1452,16 @@ function findBestCombinedAttack(player, isNearMoveLimit = false, isAggressor = f
                     let safetySummary = 0;
                     for (const attacker of attackers) {
                         const wouldBeSafe = !willCardBeThreatenedAtPosition(attacker.card, target.row, target.col, player);
-                        if (wouldBeSafe) safetySummary += 10;
-                        else safetySummary -= 20;
+                        if (wouldBeSafe) {
+                            safetySummary += 10;
+                        } else {
+                            // FEARLESS: Reduce safety penalty for face-down targets - intel gathering is worth the risk
+                            const safetyPenalty = target.card.faceDown ? -5 : -20; // Much smaller penalty for face-down attacks
+                            safetySummary += safetyPenalty;
+                            if (target.card.faceDown) {
+                                console.log(`[AI DEBUG] Fearless combined attack: reduced safety penalty for face-down target`);
+                            }
+                        }
                     }
                     score += safetySummary;
 
@@ -4428,7 +4513,7 @@ function getCardValuePriority(card) {
 // Helper function to get player-based color for card numbers/values
 function getPlayerColor(card) {
     if (card.owner === 1) {
-        return '#4a90e2'; // Blue for Player 1
+        return '#87ceeb'; // Light sky blue for Player 1 - matches gold's lightness
     } else if (card.owner === 2) {
         return '#ffd700'; // Gold for Player 2
     }
@@ -4525,7 +4610,6 @@ function createDeck() {
                 defense: getCardDefense(value, suit),
                 id: `${suit}_${value}_${Math.random()}`,
                 faceDown: false,
-                rotated: false,
                 owner: null
             });
         }
@@ -4539,7 +4623,6 @@ function createDeck() {
         defense: 0, // Leaders have no defense
         id: `joker_${Math.random()}`,
         faceDown: false,
-        rotated: false,
         owner: null
     });
     
@@ -5718,16 +5801,47 @@ function processBoardCardDrag(card, startRow, startCol, targetRow, targetCol) {
     if (!gameState.board[targetRow][targetCol]) {
         // Empty hex - try to move
         if (canMoveCard(card, startHex, targetHex)) {
+            // Save state before moving
+            saveStateToHistory();
             moveCard(startRow, startCol, targetRow, targetCol);
+            
+            // Clear drag highlights and handle post-move selection
+            clearDragHighlights();
+            
+            // Check if card can still attack after moving
+            const newValidAttacks = getValidAttacks(card, targetRow, targetCol);
+            if (newValidAttacks.length > 0) {
+                // Keep card selected for attacks
+                gameState.selectedCard = card;
+                gameState.selectedHex = [targetRow, targetCol];
+                gameState.validMoves = []; // Can't move again
+                gameState.validAttacks = newValidAttacks;
+                gameState.blockedMoves = getBlockedMoves(card, targetRow, targetCol);
+                gameState.absorptions = getAbsorptions(card, targetRow, targetCol);
+            } else {
+                // Card is done, clear everything
+                clearSelection();
+            }
+            
+            // Update canvas to refresh visual indicators
+            updateCanvas();
             return true; // Action processed successfully
         }
     } else {
         // Occupied hex - try to attack
         const targetCard = gameState.board[targetRow][targetCol];
         if (targetCard.owner !== gameState.currentPlayer && canAttackCard(card, startHex, targetCard, targetHex)) {
+            // Save state before attacking
+            saveStateToHistory();
             // Perform attack
-            selectedCards = [{ card, row: startRow, col: startCol }];
-            handleHexClick(targetRow, targetCol);
+            attack(startRow, startCol, targetRow, targetCol);
+            
+            // Clear drag highlights and selection after attack
+            clearDragHighlights();
+            clearSelection();
+            
+            // Update canvas to refresh visual indicators  
+            updateCanvas();
             return true; // Action processed successfully
         }
     }
@@ -5819,6 +5933,8 @@ function showValidSummonPositions(card) {
     // Clear previous highlights
     gameState.validMoves = [];
     gameState.validAttacks = [];
+    gameState.blockedMoves = [];
+    gameState.absorptions = [];
     hoveredHex = null;
     hoveredAttackTarget = null;
     attackPreviewResults = null;
@@ -5834,15 +5950,33 @@ function showValidSummonPositions(card) {
             }
         }
     } else {
-        // In play phase, show positions adjacent to leader
+        // In play phase, use the same logic as handleHandCardSelection
         const leaderPos = findLeaderPosition(gameState.currentPlayer);
         if (leaderPos && !gameState.leaderAttackedThisTurn) {
-            const [leaderRow, leaderCol] = leaderPos;
-            const neighbors = getHexNeighbors(leaderRow, leaderCol);
-            gameState.validMoves = neighbors.filter(([r, c]) => {
-                const existingCard = gameState.board[r][c];
-                return !existingCard || existingCard.owner === gameState.currentPlayer;
-            });
+            const mapCounts = countCardsOnMap(gameState.currentPlayer);
+            const isAtMaxCapacity = mapCounts.leaderCount >= 1 && mapCounts.regularCards >= 5;
+            const neighbors = getHexNeighbors(leaderPos[0], leaderPos[1]);
+            
+            if (isAtMaxCapacity) {
+                // At max capacity - only show positions with existing cards to replace
+                gameState.validMoves = neighbors.filter(([r, c]) => {
+                    const existingCard = gameState.board[r][c];
+                    return existingCard && existingCard.owner === gameState.currentPlayer;
+                });
+                // All valid moves will result in discarding the existing card
+                validDiscards = [...gameState.validMoves];
+            } else {
+                // Not at max - show all valid summoning positions (empty or own cards)
+                gameState.validMoves = neighbors.filter(([r, c]) => {
+                    const existingCard = gameState.board[r][c];
+                    return !existingCard || existingCard.owner === gameState.currentPlayer;
+                });
+                // Only positions with existing friendly cards will be discarded
+                validDiscards = neighbors.filter(([r, c]) => {
+                    const existingCard = gameState.board[r][c];
+                    return existingCard && existingCard.owner === gameState.currentPlayer;
+                });
+            }
         }
     }
     
@@ -6507,7 +6641,7 @@ function createCardElement(card, showFaceDown = false) {
         }
     }
     
-    if (card.rotated) cardEl.classList.add('rotated');
+    if (isCardExhausted(card)) cardEl.classList.add('rotated');
     
     // Add drag listeners based on device capabilities
     if (isTouchDevice) {
@@ -7153,6 +7287,21 @@ function performCombinedAttack(targetRow, targetCol) {
     const target = gameState.board[targetRow][targetCol];
     if (!target) return;
     
+    // Automatically face up all cards involved in attack
+    // Face up all attacking cards
+    for (const selected of gameState.selectedCards) {
+        if (selected.card.faceDown) {
+            selected.card.faceDown = false;
+            console.log(`Attacker ${selected.card.value}${selected.card.suit} automatically faced up for combined attack`);
+        }
+    }
+    
+    // Face up the defender
+    if (target.faceDown) {
+        target.faceDown = false;
+        console.log(`Defender ${target.value}${target.suit} automatically faced up for defense`);
+    }
+    
     // Calculate combined attack power
     let totalAttack = 0;
     for (const selected of gameState.selectedCards) {
@@ -7166,6 +7315,12 @@ function performCombinedAttack(targetRow, targetCol) {
         targetRow, targetCol, target.owner
     );
     const actualDefender = absorber || target;
+    
+    // Face up spade absorber if it's different from the original target
+    if (absorber && absorber !== target && absorber.faceDown) {
+        absorber.faceDown = false;
+        console.log(`Spade absorber ${absorber.value}${absorber.suit} automatically faced up for defense`);
+    }
     
     console.log(`Combined attack: ${totalAttack} vs ${actualDefender.defense}`);
     
@@ -7389,12 +7544,18 @@ function getValidMoves(card, row, col) {
     }
     
     // Face down cards can move normally when selected (treated as face up for movement calculation)
-    // But face down cards that aren't selected still have limited movement
+    // But face down cards that aren't selected still have limited movement (EXCEPTION: AI can move its own face-down cards normally)
     const isSelected = gameState.selectedCard === card || 
                       (gameState.selectedCards && gameState.selectedCards.some(selected => selected.card === card));
-    const effectiveFaceDown = card.faceDown && !isSelected;
+    const isAIControlled = aiEnabled[card.owner];
+    const effectiveFaceDown = card.faceDown && !isSelected && !isAIControlled;
     
-    // Face down unselected cards can only move 1 grid (to adjacent hexes)
+    // Debug: Log when AI is calculating moves for face-down cards
+    if (card.faceDown && isAIControlled && !isSelected) {
+        console.log(`[AI DEBUG] Calculating moves for AI face-down card ${card.value}${card.suit} at [${row},${col}]`);
+    }
+    
+    // Face down unselected cards can only move 1 grid (to adjacent hexes) - unless AI controlled
     if (effectiveFaceDown) {
         const neighbors = getHexNeighbors(row, col);
         for (const [nr, nc] of neighbors) {
@@ -7515,11 +7676,17 @@ function getValidAttacks(card, row, col) {
     // Face down cards can attack normally when selected (treated as face up for attack calculation)
     const isSelected = gameState.selectedCard === card || 
                       (gameState.selectedCards && gameState.selectedCards.some(selected => selected.card === card));
-    const effectiveFaceDown = card.faceDown && !isSelected;
+    const isAIControlled = aiEnabled[card.owner];
+    const effectiveFaceDown = card.faceDown && !isSelected && !isAIControlled;
     
-    // Face down unselected cards cannot attack
+    // Face down unselected cards cannot attack (EXCEPTION: AI can attack with its own face-down cards)
     if (effectiveFaceDown) {
         return attacks;
+    }
+    
+    // Debug: Log when AI is calculating attacks for face-down cards
+    if (card.faceDown && isAIControlled && !isSelected) {
+        console.log(`[AI DEBUG] Calculating attacks for AI face-down card ${card.value}${card.suit} at [${row},${col}]`);
     }
     
     // Leaders cannot attack
@@ -7601,17 +7768,20 @@ function getAbsorptions(card, row, col) {
 }
 
 function isBlockedByClubs(card, fromRow, fromCol, toRow, toCol) {
-    // Check if any enemy clubs block this movement
+    // Check if any enemy clubs or spades block this movement
     // Clubs only block movement INTO the blocked area, not OUT of it
     for (let r = 0; r < 11; r++) {
         for (let c = 0; c < 11; c++) {
-            const clubCard = gameState.board[r][c];
-            // Face down cards cannot block movement
-            if (clubCard && clubCard.suit === 'clubs' && clubCard.owner !== card.owner && !clubCard.rotated && !clubCard.faceDown) {
-                const clubNeighbors = getHexNeighbors(r, c);
-                // Only block if the destination (toRow, toCol) is adjacent to the club
-                if (clubNeighbors.some(([nr, nc]) => nr === toRow && nc === toCol)) {
-                    return true;
+            const blockingCard = gameState.board[r][c];
+            // Face down cards and exhausted cards cannot block movement
+            if (blockingCard && blockingCard.owner !== card.owner && !isCardExhausted(blockingCard) && !blockingCard.faceDown) {
+                // Check for clubs or spades blocking movement
+                if (blockingCard.suit === 'clubs' || blockingCard.suit === 'spades') {
+                    const neighbors = getHexNeighbors(r, c);
+                    // Only block if the destination (toRow, toCol) is adjacent to the blocking card
+                    if (neighbors.some(([nr, nc]) => nr === toRow && nc === toCol)) {
+                        return true;
+                    }
                 }
             }
         }
@@ -7848,13 +8018,9 @@ function findSpadeAbsorber(attackerRow, attackerCol, targetRow, targetCol, defen
     const attackerNeighbors = getHexNeighbors(attackerRow, attackerCol);
     for (const [nr, nc] of attackerNeighbors) {
         const card = gameState.board[nr][nc];
-        // Face down spades cannot absorb attacks
-        if (card && card.suit === 'spades' && card.owner === defenderOwner && !card.rotated && !card.faceDown) {
-            // Exhausted spades cannot absorb attacks
-            const hasBeenUsed = gameState.cardsMovedThisTurn.has(card.id) || gameState.cardsAttackedThisTurn.has(card.id);
-            if (!hasBeenUsed) {
-                return card;
-            }
+        // Face down spades and exhausted spades cannot absorb attacks
+        if (card && card.suit === 'spades' && card.owner === defenderOwner && !isCardExhausted(card) && !card.faceDown) {
+            return card;
         }
     }
     
@@ -7873,13 +8039,9 @@ function findSpadeAbsorber(attackerRow, attackerCol, targetRow, targetCol, defen
             const pathNeighbors = getHexNeighbors(checkRow, checkCol);
             for (const [nr, nc] of pathNeighbors) {
                 const card = gameState.board[nr][nc];
-                // Face down spades cannot absorb attacks
-                if (card && card.suit === 'spades' && card.owner === defenderOwner && !card.rotated && !card.faceDown) {
-                    // Exhausted spades cannot absorb attacks
-                    const hasBeenUsed = gameState.cardsMovedThisTurn.has(card.id) || gameState.cardsAttackedThisTurn.has(card.id);
-                    if (!hasBeenUsed) {
-                        return card;
-                    }
+                // Face down spades and exhausted spades cannot absorb attacks
+                if (card && card.suit === 'spades' && card.owner === defenderOwner && !isCardExhausted(card) && !card.faceDown) {
+                    return card;
                 }
             }
         }
@@ -8215,7 +8377,7 @@ function updateCanvas() {
             // Highlight valid moves
             if (isValidMove) {
                 // Use current player's color for move indicators
-                const playerColor = gameState.currentPlayer === 1 ? '#4a90e2' : '#ffd700';
+                const playerColor = gameState.currentPlayer === 1 ? '#87ceeb' : '#ffd700';
                 fillColor = `${playerColor}40`; // Add transparency (25% opacity)
                 strokeColor = `${playerColor}99`; // Add transparency (60% opacity)
                 strokeWidth = 1;
@@ -8363,22 +8525,89 @@ function updateCanvas() {
     }
 }
 
-function drawCard(card, x, y, isAttackTarget = false, isSelected = false, isMultiSelected = false, isAbsorbingSpade = false) {
-    // Set colors - player color for numbers, suit color for symbols
-    let playerColor = '#ffffff'; // Default white for face-down cards
-    let suitColor = '#ffffff';
-    if (!card.faceDown) {
-        playerColor = getPlayerColor(card);
-        suitColor = getSuitColor(card.suit, card);
+/**
+ * Convert a color to grayscale
+ * @param {string} color - Color in hex format (e.g., '#ff0000')
+ * @returns {string} Grayscale color in hex format
+ */
+function convertToGrayscale(color) {
+    // Handle common color formats
+    let r, g, b;
+    
+    if (color.startsWith('#')) {
+        // Hex color
+        const hex = color.slice(1);
+        if (hex.length === 3) {
+            r = parseInt(hex[0] + hex[0], 16);
+            g = parseInt(hex[1] + hex[1], 16);
+            b = parseInt(hex[2] + hex[2], 16);
+        } else if (hex.length === 6) {
+            r = parseInt(hex.slice(0, 2), 16);
+            g = parseInt(hex.slice(2, 4), 16);
+            b = parseInt(hex.slice(4, 6), 16);
+        } else {
+            return color; // Invalid format, return original
+        }
+    } else if (color.startsWith('rgb')) {
+        // RGB format
+        const matches = color.match(/rgb\((\d+),\s*(\d+),\s*(\d+)\)/);
+        if (matches) {
+            r = parseInt(matches[1]);
+            g = parseInt(matches[2]);
+            b = parseInt(matches[3]);
+        } else {
+            return color; // Invalid format, return original
+        }
+    } else {
+        // Named colors or other formats - return a neutral gray
+        return '#888888';
     }
     
-    // Set opacity based on exhaustion status
-    ctx.save();
-    if (isCardExhausted(card)) {
-        ctx.globalAlpha = 0.5; // Half opacity for exhausted cards
+    // Calculate grayscale using luminance formula
+    const gray = Math.round(0.299 * r + 0.587 * g + 0.114 * b);
+    
+    // Convert back to hex
+    const grayHex = gray.toString(16).padStart(2, '0');
+    return `#${grayHex}${grayHex}${grayHex}`;
+}
+
+function drawCard(card, x, y, isAttackTarget = false, isSelected = false, isMultiSelected = false, isAbsorbingSpade = false) {
+    // Set colors - player color for numbers, suit color for symbols
+    let playerColor = '#ffffff'; // Default white for enemy face-down cards
+    let suitColor = '#ffffff';
+    const isOwnCard = card.owner === gameState.currentPlayer;
+    const isHumanCard = !aiEnabled[card.owner]; // Check if card belongs to human player
+    const isBothAI = aiEnabled[1] && aiEnabled[2]; // Check if both players are AI
+    const isBothHuman = !aiEnabled[1] && !aiEnabled[2]; // Check if both players are human
+    const isExhausted = isCardExhausted(card); // Declare this early for use in color processing
+    
+    // Determine face-down visibility based on game mode
+    let showFaceDownCard = false;
+    if (isBothHuman) {
+        // Human vs Human: use old behavior (current player's cards)
+        showFaceDownCard = isOwnCard;
+    } else if (isBothAI) {
+        // AI vs AI: show all face-down cards for human observer
+        showFaceDownCard = true;
     } else {
-        ctx.globalAlpha = 1.0; // Full opacity for available cards
+        // Mixed Human vs AI: only show human player's face-down cards
+        showFaceDownCard = isHumanCard;
     }
+    
+    if (!card.faceDown || (card.faceDown && showFaceDownCard)) {
+        // Show colors based on face-down visibility rules
+        playerColor = getPlayerColor(card);
+        suitColor = getSuitColor(card.suit, card);
+        
+        // Convert to grayscale if card is exhausted
+        if (isExhausted) {
+            playerColor = convertToGrayscale(playerColor);
+            suitColor = convertToGrayscale(suitColor);
+        }
+    }
+    
+    ctx.save();
+    ctx.globalAlpha = 1.0; // Keep full opacity, use grayscale for exhausted cards instead
     
     // Draw hexagon border around card with player's side color (smaller than grid hex)
     let borderColor = card.faceDown ? getPlayerColor(card) : getPlayerColor(card);
@@ -8430,15 +8659,38 @@ function drawCard(card, x, y, isAttackTarget = false, isSelected = false, isMult
         ctx.fill();
     }
     
-    // Draw border
+    // Draw border with half opacity for exhausted cards
+    if (isExhausted) {
+        ctx.globalAlpha = 0.5; // Half opacity for exhausted card borders
+    }
+    
     ctx.strokeStyle = borderColor;
     ctx.lineWidth = lineWidth;
     ctx.stroke();
     
-    // Draw text normally - only number and symbol with team colors - vertically centered
-    if (!card.faceDown) {
+    // Reset opacity back to full for content rendering
+    if (isExhausted) {
+        ctx.globalAlpha = 1.0;
+    }
+    
+    // Add visual patterns for different card states
+    if (card.faceDown && showFaceDownCard) {
+        // Draw diagonal stripe pattern based on game mode visibility rules
+        drawDiagonalStripes(x, y, cardHexSize, `${getPlayerColor(card)}20`); // Semi-transparent player color
+    }
+    
+    // Draw text - show face-down cards based on game mode visibility rules
+    const shouldShowCard = !card.faceDown || showFaceDownCard;
+    
+    if (shouldShowCard) {
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
+        
+        // Apply additional opacity reduction for visible face-down cards
+        if (card.faceDown && showFaceDownCard) {
+            ctx.globalAlpha *= 0.5; // Further reduce opacity for face-down cards visible to observer
+        }
+        
         if (card.suit === 'joker') {
             ctx.fillStyle = suitColor;
             ctx.font = `bold ${Math.round(20 * zoomLevel)}px Arial`;
@@ -8453,6 +8705,52 @@ function drawCard(card, x, y, isAttackTarget = false, isSelected = false, isMult
             ctx.font = `bold ${Math.round(16 * zoomLevel)}px Arial`;
             ctx.fillText(suitSymbols[card.suit], x, y + Math.round(6 * zoomLevel));
         }
+    }
+    
+    ctx.restore();
+}
+
+/**
+ * Draw diagonal stripes pattern for exhausted cards
+ * @param {number} x - Center X coordinate
+ * @param {number} y - Center Y coordinate  
+ * @param {number} size - Hexagon size
+ * @param {string} color - Stripe color
+ */
+function drawDiagonalStripes(x, y, size, color) {
+    ctx.save();
+    
+    // Create hexagonal clipping path
+    const corners = [];
+    for (let i = 0; i < 6; i++) {
+        const angle = (Math.PI / 3) * i;
+        corners.push({
+            x: x + size * Math.cos(angle),
+            y: y + size * Math.sin(angle)
+        });
+    }
+    
+    ctx.beginPath();
+    ctx.moveTo(corners[0].x, corners[0].y);
+    for (let i = 1; i < 6; i++) {
+        ctx.lineTo(corners[i].x, corners[i].y);
+    }
+    ctx.closePath();
+    ctx.clip();
+    
+    // Draw diagonal stripes
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2 * zoomLevel;
+    
+    const stripeSpacing = 8 * zoomLevel;
+    const numStripes = Math.ceil((size * 2) / stripeSpacing) + 2;
+    
+    for (let i = -numStripes; i <= numStripes; i++) {
+        const offset = i * stripeSpacing;
+        ctx.beginPath();
+        ctx.moveTo(x - size + offset, y - size);
+        ctx.lineTo(x + size + offset, y + size);
+        ctx.stroke();
     }
     
     ctx.restore();
@@ -8803,7 +9101,7 @@ function handleMenuClose(e) {
 
 // Card drag handlers
 function handleCardDragStart(e, card) {
-    if (card.owner === gameState.currentPlayer && (gameState.phase === 'setup' || !card.rotated)) {
+    if (card.owner === gameState.currentPlayer && (gameState.phase === 'setup' || !isCardExhausted(card))) {
         // Use new unified drag system
         const rect = e.target.getBoundingClientRect();
         startHandCardDrag(card, e.clientX, e.clientY);
