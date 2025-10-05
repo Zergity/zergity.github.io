@@ -22,7 +22,8 @@ body {
     /* Disable iOS Safari's tap highlight and zoom */
     -webkit-tap-highlight-color: transparent;
     -webkit-touch-callout: none;
-    touch-action: pan-x pan-y;
+    /* Allow pinch zoom and pan but prevent default drag behavior */
+    touch-action: manipulation;
 }
 
 /* Context-sensitive cursors */
@@ -41,6 +42,24 @@ body {
 #hex-canvas.can-place { cursor: copy; }
 #hex-canvas.blocked { cursor: not-allowed; }
 #hex-canvas.dragging { cursor: grabbing; }
+
+/* Board card overlay styles for HTML5 drag-and-drop */
+.board-card-overlay {
+    position: absolute;
+    cursor: grab;
+    z-index: 1000;
+    pointer-events: auto;
+    /* Mobile touch improvements */
+    touch-action: none;
+    -webkit-user-drag: none;
+}
+    background: transparent;
+    border-radius: 50%;
+}
+
+.board-card-overlay:active {
+    cursor: grabbing;
+}
 
 #game-container {
     position: relative;
@@ -389,6 +408,18 @@ body {
     position: relative;
     margin: 1px;
     transition: all 0.3s ease;
+    /* Mobile touch improvements */
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: rgba(255, 255, 255, 0.1);
+}
+
+/* Hand cards should show grab cursor when draggable */
+.card:not(.end-turn-card):hover {
+    cursor: grab;
+}
+
+.card:not(.end-turn-card):active {
+    cursor: grabbing;
 }
 
 /* Player colors are now handled via JavaScript background colors */
