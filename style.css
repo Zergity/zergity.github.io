@@ -22,7 +22,8 @@ body {
     /* Disable iOS Safari's tap highlight and zoom */
     -webkit-tap-highlight-color: transparent;
     -webkit-touch-callout: none;
-    touch-action: pan-x pan-y;
+    /* Allow pinch zoom and pan but prevent default drag behavior */
+    touch-action: manipulation;
 }
 
 /* Context-sensitive cursors */
@@ -41,6 +42,142 @@ body {
 #hex-canvas.can-place { cursor: copy; }
 #hex-canvas.blocked { cursor: not-allowed; }
 #hex-canvas.dragging { cursor: grabbing; }
+
+/* Board card overlay styles for HTML5 drag-and-drop */
+.board-card-overlay {
+    position: absolute;
+    cursor: grab;
+    z-index: 1000;
+    pointer-events: auto;
+    /* Mobile touch improvements */
+    touch-action: none;
+    -webkit-user-drag: none;
+    background: transparent;
+    border-radius: 50%;
+}
+
+/* Fade-out animation overlay for captured/discarded cards */
+.card-fade-overlay {
+    position: absolute;
+    z-index: 1001;
+    pointer-events: none;
+    opacity: 1;
+    transition: opacity 0.8s ease-out;
+}
+
+.card-fade-overlay.fade-out {
+    opacity: 0;
+}
+
+/* Animation for different card removal types */
+.card-fade-overlay.captured {
+    transition: opacity 0.6s ease-out, transform 0.6s ease-out;
+}
+
+.card-fade-overlay.captured.fade-out {
+    opacity: 0;
+    transform: scale(0.8);
+}
+
+.card-fade-overlay.discarded {
+    transition: opacity 0.8s ease-out, transform 0.8s ease-out;
+}
+
+.card-fade-overlay.discarded.fade-out {
+    opacity: 0;
+    transform: scale(1.1) rotate(5deg);
+}
+
+/* Leader attack animation - much more dramatic */
+.card-fade-overlay.leader-attacked {
+    transition: opacity 1.5s ease-out, transform 1.5s ease-out, box-shadow 1.5s ease-out;
+    animation: dramatic-damage 0.2s ease-in-out 5, shake 0.1s ease-in-out 10;
+}
+
+.card-fade-overlay.leader-attacked.fade-out {
+    opacity: 0;
+    transform: scale(1.5);
+    box-shadow: 0 0 100px rgba(255, 0, 0, 0);
+}
+
+@keyframes dramatic-damage {
+    0% { 
+        transform: scale(1); 
+        box-shadow: 0 0 40px rgba(255, 0, 0, 1); 
+    }
+    50% { 
+        transform: scale(1.3); 
+        box-shadow: 0 0 80px rgba(255, 0, 0, 1), 0 0 120px rgba(255, 100, 100, 0.8); 
+    }
+    100% { 
+        transform: scale(1); 
+        box-shadow: 0 0 40px rgba(255, 0, 0, 1); 
+    }
+}
+
+@keyframes shake {
+    0% { transform: translateX(0); }
+    25% { transform: translateX(-2px); }
+    50% { transform: translateX(2px); }
+    75% { transform: translateX(-1px); }
+    100% { transform: translateX(0); }
+}
+
+@keyframes flash-red {
+    0% { color: #fff; }
+    50% { color: #ff0000; }
+    100% { color: #fff; }
+}
+
+/* Replacement animation */
+.card-fade-overlay.replacement-old {
+    transition: opacity 0.8s ease-out, transform 0.8s ease-out;
+}
+
+.card-fade-overlay.replacement-old.fade-out {
+    opacity: 0;
+    transform: scale(0.3) rotate(-15deg);
+}
+
+.card-fade-overlay.replacement-new {
+    transition: opacity 0.6s ease-out, transform 0.6s ease-out;
+}
+
+.card-fade-overlay.replacement-new.fade-in {
+    opacity: 1 !important;
+    transform: scale(1) !important;
+}
+
+/* Attack highlight animation */
+.card-fade-overlay.attacker-highlight {
+    transition: all 1.5s ease-out;
+    animation: attack-pulse 0.3s ease-in-out 3;
+}
+
+.card-fade-overlay.attacker-highlight.attacking {
+    opacity: 0;
+    transform: scale(1.2);
+    box-shadow: 0 0 40px rgba(255, 215, 0, 0);
+}
+
+@keyframes attack-pulse {
+    0% { 
+        transform: scale(1); 
+        box-shadow: 0 0 20px rgba(255, 215, 0, 0.8); 
+    }
+    50% { 
+        transform: scale(1.15); 
+        box-shadow: 0 0 30px rgba(255, 215, 0, 1), 0 0 60px rgba(255, 215, 0, 0.5); 
+    }
+    100% { 
+        transform: scale(1); 
+        box-shadow: 0 0 20px rgba(255, 215, 0, 0.8); 
+    }
+}
+
+.board-card-overlay:active {
+    cursor: grabbing;
+}
 
 #game-container {
     position: relative;
@@ -389,6 +526,18 @@ body {
     position: relative;
     margin: 1px;
     transition: all 0.3s ease;
+    /* Mobile touch improvements */
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: rgba(255, 255, 255, 0.1);
+}
+
+/* Hand cards should show grab cursor when draggable */
+.card:not(.end-turn-card):hover {
+    cursor: grab;
+}
+
+.card:not(.end-turn-card):active {
+    cursor: grabbing;
 }
 
 /* Player colors are now handled via JavaScript background colors */

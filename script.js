@@ -45,6 +45,9 @@ let gameState = {
     firstPlayer: 1 // Track who had the first turn (aggressor)
 };
 
+// Fade-out animation state (now using DOM elements)
+let fadeOutElements = []; // Array of DOM elements being animated
+
 // Game history for undo functionality
 let gameHistory = [];
 const MAX_HISTORY_SIZE = 10; // Keep last 10 states
@@ -74,6 +77,26 @@ let boardOffsetY;
 let mapRotated = false; // false = Player 1's perspective, true = Player 2's perspective
 let mapFlippingEnabled = true; // Toggle for automatic map flipping on player switch (auto-managed based on AI)
 let aiEnabled = { 1: false, 2: true }; // Track which players are AI controlled - Default: P1 human vs P2 AI
+
+
+
+// AI face down card helper
+function getCardForAI(card, aiPlayer) {
+    // AI can only see face up cards of enemies
+    if (card.faceDown && card.owner !== aiPlayer) {
+        // Return a generic face down card representation for AI
+        // Assume face-down cards are moderate threats that should be revealed
+        return {
+            ...card,
+            value: '?',
+            suit: 'unknown',
+            attack: 3, // Assume higher attack to encourage proactive elimination
+            defense: 3, // Assume higher defense to encourage combined attacks
+            isAIHidden: true
+        };
+    }
+    return card; // AI can see its own cards and face up enemy cards
+}
 
 // AI Aggression System
 const BASE_AGG = 70; // Base aggression level (0-100 scale)
@@ -725,15 +748,20 @@ function performAITurnSequence(player) {
         return;
     }
 
-    // Priority 3: Combined attacks - Use multiple cards to capture strong enemies
+    // Priority 3: Combined attacks - Use multiple cards to capture strong enemies and reveal face-down threats
     updateAIThinking('Planning combined attacks...', 5);
     const combinedAttackAction = findBestCombinedAttack(player, isNearMoveLimit, isAggressor);
     if (combinedAttackAction) {
         const actionKey = `combined-attack-${combinedAttackAction.target.row}-${combinedAttackAction.target.col}-${combinedAttackAction.combSize}`;
         
         if (lastAIAction !== actionKey) {
-            updateAIThinking(`Combined attack: ${combinedAttackAction.combSize} cards!`, 6);
-            console.log(`AI Player ${player} combined attack: ${combinedAttackAction.combSize} cards attacking ${combinedAttackAction.target.card.value}${combinedAttackAction.target.card.suit} at (${combinedAttackAction.target.row},${combinedAttackAction.target.col}) - Total attack: ${combinedAttackAction.totalAttack} vs ${combinedAttackAction.targetDefense}`);
+            const faceDownText = combinedAttackAction.target.card.faceDown ? " [FEARLESS FACE-DOWN ASSAULT]" : "";
+            if (combinedAttackAction.target.card.faceDown) {
+                updateAIThinking(`Fearless assault on face-down threat!`, 6);
+            } else {
+                updateAIThinking(`Combined attack: ${combinedAttackAction.combSize} cards!`, 6);
+            }
+            console.log(`AI Player ${player} combined attack: ${combinedAttackAction.combSize} cards attacking ${combinedAttackAction.target.card.value}${combinedAttackAction.target.card.suit} at (${combinedAttackAction.target.row},${combinedAttackAction.target.col}) - Total attack: ${combinedAttackAction.totalAttack} vs ${combinedAttackAction.targetDefense}${faceDownText}`);
             lastAIAction = actionKey;
             aiActionCount.set(turnKey, actionsThisTurn + 1);
             saveStateToHistory();
@@ -762,8 +790,19 @@ function performAITurnSequence(player) {
             return;
         }
         
+        const target = gameState.board[attackAction.toRow][attackAction.toCol];
         const captureText = attackAction.expectedCapture ? " [CAPTURE]" : " [DAMAGE]";
-        console.log(`AI Player ${player} attacking with ${attackAction.card.value}${attackAction.card.suit} at (${attackAction.fromRow},${attackAction.fromCol}) -> (${attackAction.toRow},${attackAction.toCol})${captureText}`);
+        const faceDownText = target?.faceDown ? " [REVEAL FACE-DOWN]" : "";
+        const fearlessText = attackAction.isFaceDownOverride ? " [FEARLESS OVERRIDE]" : "";
+        const attackerFaceDownText = attackAction.card.faceDown ? " [FACE-DOWN ATTACKER]" : "";
+        
+        if (target?.faceDown) {
+            updateAIThinking('Fearlessly attacking face-down threat!', 6);
+        } else if (attackAction.card.faceDown) {
+            updateAIThinking('Using face-down card to attack!', 6);
+        }
+        
+        console.log(`AI Player ${player} attacking with ${attackAction.card.value}${attackAction.card.suit} at (${attackAction.fromRow},${attackAction.fromCol}) -> (${attackAction.toRow},${attackAction.toCol})${captureText}${faceDownText}${fearlessText}${attackerFaceDownText}`);
         lastAIAction = actionKey;
         aiActionCount.set(turnKey, actionsThisTurn + 1);
         saveStateToHistory();
@@ -1184,17 +1223,21 @@ function findBestAttackAction(player, isNearMoveLimit = false, isAggressor = fal
                 // PRIMARY: Capture probability and value
                 const canCapture = card.attack >= target.defense;
                 if (canCapture) {
-                    // MASSIVE bonus for guaranteed captures
-                    let captureBonus = 100;
-                    
-                    // If approaching move limit and we're the aggressor, be extra aggressive about captures
-                    if (isNearMoveLimit && isAggressor) {
-                        captureBonus += 200; // Aggressor needs to win by captures
-                    }
-                    
-                    score += captureBonus;
-                    
-                    // Bonus based on captured card value
+                // MASSIVE bonus for guaranteed captures
+                let captureBonus = 100;
+                
+                // If approaching move limit and we're the aggressor, be extra aggressive about captures
+                if (isNearMoveLimit && isAggressor) {
+                    captureBonus += 200; // Aggressor needs to win by captures
+                }
+                
+                // STRATEGIC: Extra bonus for attacking face-down cards (reveal and disable them)
+                if (target.faceDown) {
+                    captureBonus += 150; // Strong bonus for revealing face-down cards
+                    console.log(`[AI DEBUG] Face-down card attack bonus: +150 for revealing unknown threat`);
+                }
+                
+                score += captureBonus;                    // Bonus based on captured card value
                     const captureValue = target.attack + target.defense;
                     score += captureValue * 10;
                     
@@ -1211,6 +1254,13 @@ function findBestAttackAction(player, isNearMoveLimit = false, isAggressor = fal
                     // Even if we can't capture, weakening enemy cards has value
                     const damageDealt = Math.min(card.attack, target.defense);
                     score += damageDealt * 5; // Smaller bonus for damage
+                    
+                    // STRATEGIC: Extra bonus for attacking face-down cards even if we can't capture them
+                    // This reveals them and potentially weakens unknown threats
+                    if (target.faceDown) {
+                        score += 75; // Good bonus for revealing face-down cards even without capture
+                        console.log(`[AI DEBUG] Face-down reveal bonus: +75 for attacking to reveal unknown card`);
+                    }
                 }
 
                 // DEFENSE: Prioritize saving our own cards under threat
@@ -1243,6 +1293,10 @@ function findBestAttackAction(player, isNearMoveLimit = false, isAggressor = fal
                 const wouldBeSafeAfterAttack = !willCardBeThreatenedAtPosition(card, targetRow, targetCol, player);
                 if (wouldBeSafeAfterAttack) {
                     score += 20; // Bonus for safe attacks
+                } else if (target.faceDown) {
+                    // FEARLESS: Don't penalize risky attacks on face-down cards - the intelligence value is worth it
+                    score += 10; // Small bonus even for risky face-down attacks (revelation is strategic)
+                    console.log(`[AI DEBUG] Fearless face-down attack: accepting risk to reveal unknown threat`);
                 }
 
                 // Add strategic randomization to make AI less predictable
@@ -1261,6 +1315,39 @@ function findBestAttackAction(player, isNearMoveLimit = false, isAggressor = fal
                         expectedCapture: canCapture,
                         targetValue: target.attack + target.defense
                     };
+                }
+            }
+        }
+    }
+
+    // FEARLESS OVERRIDE: If we found a face-down attack but it scored lower than a face-up attack,
+    // consider if the face-down attack is still worth doing for intelligence gathering
+    if (bestAttack && !bestAttack.target?.faceDown) {
+        // Look for any face-down attack opportunity that might have been scored lower
+        for (let r = 0; r < 11; r++) {
+            for (let c = 0; c < 11; c++) {
+                const card = gameState.board[r][c];
+                if (card && card.owner === player && !isCardExhausted(card) && card.attack > 0) {
+                    const validAttacks = getValidAttacks(card, r, c);
+                    for (const [targetRow, targetCol] of validAttacks) {
+                        const target = gameState.board[targetRow][targetCol];
+                        if (target && target.owner !== player && target.faceDown) {
+                            // Found a face-down target - if it has decent capture potential, consider it
+                            if (card.attack >= target.defense && bestScore < 300) {
+                                console.log(`[AI DEBUG] FEARLESS OVERRIDE: Prioritizing face-down capture over lower-scoring face-up attack`);
+                                return {
+                                    card,
+                                    fromRow: r,
+                                    fromCol: c,
+                                    toRow: targetRow,
+                                    toCol: targetCol,
+                                    expectedCapture: true,
+                                    targetValue: target.attack + target.defense,
+                                    isFaceDownOverride: true
+                                };
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -1330,6 +1417,18 @@ function findBestCombinedAttack(player, isNearMoveLimit = false, isAggressor = f
                         score += 300; // Huge bonus for enabling impossible captures
                     }
                     
+                    // STRATEGIC: HUGE bonus for combined attacks on face-down cards
+                    if (target.card.faceDown) {
+                        score += 400; // Massive bonus for using multiple cards to reveal and disable face-down threats
+                        console.log(`[AI DEBUG] Face-down combined attack bonus: +400 for revealing unknown threat with ${combSize} cards`);
+                        
+                        // Additional bonus if this requires multiple cards when single cards couldn't do it
+                        if (singleCardCantCapture) {
+                            score += 200; // Extra bonus for coordinated assault on hidden threats
+                            console.log(`[AI DEBUG] Face-down coordinated assault bonus: +200 for multi-card reveal`);
+                        }
+                    }
+                    
                     // Bonus based on target value
                     const targetValue = target.card.attack + target.card.defense;
                     score += targetValue * 15;
@@ -1356,8 +1455,16 @@ function findBestCombinedAttack(player, isNearMoveLimit = false, isAggressor = f
                     let safetySummary = 0;
                     for (const attacker of attackers) {
                         const wouldBeSafe = !willCardBeThreatenedAtPosition(attacker.card, target.row, target.col, player);
-                        if (wouldBeSafe) safetySummary += 10;
-                        else safetySummary -= 20;
+                        if (wouldBeSafe) {
+                            safetySummary += 10;
+                        } else {
+                            // FEARLESS: Reduce safety penalty for face-down targets - intel gathering is worth the risk
+                            const safetyPenalty = target.card.faceDown ? -5 : -20; // Much smaller penalty for face-down attacks
+                            safetySummary += safetyPenalty;
+                            if (target.card.faceDown) {
+                                console.log(`[AI DEBUG] Fearless combined attack: reduced safety penalty for face-down target`);
+                            }
+                        }
                     }
                     score += safetySummary;
 
@@ -3488,17 +3595,34 @@ let isMobileHovering = false; // Track if in mobile hover state
 // Mobile multi-select state 
 let isMobileMultiSelectMode = false; // Track if in mobile multi-select mode
 
+// Global touch device detection
+const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+
 // Hand card summoning state
 let validDiscards = []; // Track positions where cards will be discarded during replacement
 
-// Drag functionality
+// Drag functionality - unified drag system
+let dragState = {
+    isDragging: false,
+    dragType: null, // 'hand-summon', 'card-move', 'card-attack', 'map'
+    draggedCard: null,
+    startX: 0,
+    startY: 0,
+    startHex: null,
+    currentHex: null,
+    mapStartX: 0,
+    mapStartY: 0,
+    originalSelection: null // Store original selection state during drag
+};
+
+// Legacy compatibility (will be removed)
 let isDraggingCard = false;
 let isDraggingMap = false;
 let draggedCard = null;
-let dragStartX = 0;
-let dragStartY = 0;
-let mapDragStartX = 0;
-let mapDragStartY = 0;
+
+// Performance optimization for drag rendering
+let dragUpdateRequested = false;
+let lastMousePos = null;
 
 // LocalStorage functions for game persistence
 function saveGameState() {
@@ -4392,7 +4516,7 @@ function getCardValuePriority(card) {
 // Helper function to get player-based color for card numbers/values
 function getPlayerColor(card) {
     if (card.owner === 1) {
-        return '#4a90e2'; // Blue for Player 1
+        return '#87ceeb'; // Light sky blue for Player 1 - matches gold's lightness
     } else if (card.owner === 2) {
         return '#ffd700'; // Gold for Player 2
     }
@@ -4489,7 +4613,6 @@ function createDeck() {
                 defense: getCardDefense(value, suit),
                 id: `${suit}_${value}_${Math.random()}`,
                 faceDown: false,
-                rotated: false,
                 owner: null
             });
         }
@@ -4503,7 +4626,6 @@ function createDeck() {
         defense: 0, // Leaders have no defense
         id: `joker_${Math.random()}`,
         faceDown: false,
-        rotated: false,
         owner: null
     });
     
@@ -4839,6 +4961,345 @@ function showPlayerWinCaption(player) {
     showFlashCaption(winText, 'win', 10000);
 }
 
+// HTML5/CSS fade-out animation functions
+function startFadeOutAnimation(card, position, animationType = 'captured') {
+    // Get the canvas position for this card
+    const pos = hexToPixel(position[1], position[0]);
+    const canvas = document.getElementById('hex-canvas');
+    const canvasRect = canvas.getBoundingClientRect();
+    
+    // Create a DOM element overlay that looks exactly like a hand card
+    const overlay = document.createElement('div');
+    overlay.className = `card card-fade-overlay ${animationType}`;
+    
+    // Position overlay exactly over the canvas card - make it larger
+    overlay.style.position = 'absolute';
+    overlay.style.left = (canvasRect.left + pos.x - 24) + 'px'; // Center on card (24px = half larger card width)
+    overlay.style.top = (canvasRect.top + pos.y - 32) + 'px'; // Center on card (32px = half larger card height)
+    overlay.style.width = '48px';  // 1.5x larger than hand cards
+    overlay.style.height = '64px'; // 1.5x larger than hand cards
+    overlay.style.zIndex = '1001';
+    overlay.style.pointerEvents = 'none';
+    
+    // Set card colors - use player color for background
+    const playerColor = getPlayerColor(card);
+    const suitColor = card.faceDown ? '#888' : getSuitColor(card.suit, card);
+    
+    overlay.style.border = `2px solid ${playerColor}`;
+    overlay.style.backgroundColor = card.faceDown ? '#333' : playerColor;
+    
+    // Add special styling for leaders (jokers)
+    if (card.suit === 'joker') {
+        overlay.classList.add('joker', `player${card.owner}`);
+    }
+    
+    // Create card content structure like hand cards
+    if (!card.faceDown) {
+        const valueDiv = document.createElement('div');
+        valueDiv.className = 'card-value';
+        valueDiv.style.fontSize = '20px'; // Larger font for bigger card
+        valueDiv.style.color = suitColor; // Use suit color for text
+        valueDiv.textContent = card.suit === 'joker' ? '★' : card.value;
+        overlay.appendChild(valueDiv);
+        
+        const suitDiv = document.createElement('div');
+        suitDiv.className = 'card-suit';
+        suitDiv.style.fontSize = '22px'; // Larger font for bigger card
+        suitDiv.style.color = suitColor; // Use suit color for text
+        suitDiv.textContent = getSuitSymbol(card.suit);
+        overlay.appendChild(suitDiv);
+    }
+    
+    // Add to DOM
+    document.body.appendChild(overlay);
+    fadeOutElements.push(overlay);
+    
+    // Trigger fade-out animation
+    requestAnimationFrame(() => {
+        overlay.classList.add('fade-out');
+    });
+    
+    // Remove card from board immediately and clean up overlay after animation
+    gameState.board[position[0]][position[1]] = null;
+    
+    const duration = animationType === 'captured' ? 600 : 800;
+    setTimeout(() => {
+        if (overlay.parentNode) {
+            overlay.parentNode.removeChild(overlay);
+        }
+        fadeOutElements = fadeOutElements.filter(el => el !== overlay);
+        updateCanvas(); // Refresh canvas after animation
+    }, duration);
+}
+
+// Leader attack animation - shows damage effect without removing the leader
+function startLeaderAttackAnimation(leader, position) {
+    // Get the canvas position for the leader
+    const pos = hexToPixel(position[1], position[0]);
+    const canvas = document.getElementById('hex-canvas');
+    const canvasRect = canvas.getBoundingClientRect();
+    
+    // Create a damage effect overlay
+    const overlay = document.createElement('div');
+    overlay.className = 'card card-fade-overlay leader-attacked';
+    
+    // Position overlay exactly over the leader - make it much larger and more dramatic
+    overlay.style.position = 'absolute';
+    overlay.style.left = (canvasRect.left + pos.x - 32) + 'px'; // Much larger overlay
+    overlay.style.top = (canvasRect.top + pos.y - 42) + 'px';
+    overlay.style.width = '64px';  // 2x larger than hand cards
+    overlay.style.height = '84px'; // 2x larger than hand cards
+    overlay.style.zIndex = '1002';
+    overlay.style.pointerEvents = 'none';
+    
+    // Make it look like the leader with dramatic damage effect
+    overlay.style.border = `4px solid #ff0000`;
+    overlay.style.backgroundColor = 'rgba(255, 0, 0, 0.9)';
+    overlay.style.boxShadow = '0 0 40px rgba(255, 0, 0, 1), 0 0 80px rgba(255, 100, 100, 0.5)';
+    overlay.style.borderRadius = '8px';
+    
+    overlay.classList.add('joker', `player${leader.owner}`);
+    
+    // Add leader star with dramatic effects
+    const valueDiv = document.createElement('div');
+    valueDiv.className = 'card-value';
+    valueDiv.textContent = '★';
+    valueDiv.style.color = '#fff';
+    valueDiv.style.fontSize = '28px';
+    valueDiv.style.textShadow = '0 0 20px #ff0000, 0 0 40px #ff0000';
+    valueDiv.style.animation = 'flash-red 0.15s ease-in-out infinite';
+    overlay.appendChild(valueDiv);
+    
+    // Add dramatic "DAMAGE" effect
+    const attackedDiv = document.createElement('div');
+    attackedDiv.className = 'card-suit';
+    attackedDiv.textContent = '💥';
+    attackedDiv.style.color = '#fff';
+    attackedDiv.style.fontSize = '20px';
+    attackedDiv.style.textShadow = '0 0 15px #ff0000';
+    overlay.appendChild(attackedDiv);
+    
+    // Add to DOM
+    document.body.appendChild(overlay);
+    fadeOutElements.push(overlay);
+    
+    // Trigger damage effect animation
+    requestAnimationFrame(() => {
+        overlay.classList.add('fade-out');
+    });
+    
+    // Clean up after animation (leader stays on board)
+    setTimeout(() => {
+        if (overlay.parentNode) {
+            overlay.parentNode.removeChild(overlay);
+        }
+        fadeOutElements = fadeOutElements.filter(el => el !== overlay);
+    }, 1000);
+}
+
+// Replacement summon animation - shows old card transforming to new card
+function startReplacementAnimation(oldCard, newCard, position) {
+    // Get the canvas position for this card
+    const pos = hexToPixel(position[1], position[0]);
+    const canvas = document.getElementById('hex-canvas');
+    const canvasRect = canvas.getBoundingClientRect();
+    
+    // Create old card overlay
+    const oldOverlay = document.createElement('div');
+    oldOverlay.className = 'card card-fade-overlay replacement-old';
+    
+    // Position old card overlay
+    oldOverlay.style.position = 'absolute';
+    oldOverlay.style.left = (canvasRect.left + pos.x - 24) + 'px';
+    oldOverlay.style.top = (canvasRect.top + pos.y - 32) + 'px';
+    oldOverlay.style.width = '48px';
+    oldOverlay.style.height = '64px';
+    oldOverlay.style.zIndex = '1003';
+    oldOverlay.style.pointerEvents = 'none';
+    
+    // Style old card
+    const oldPlayerColor = getPlayerColor(oldCard);
+    const oldSuitColor = getSuitColor(oldCard.suit, oldCard);
+    oldOverlay.style.border = `2px solid ${oldPlayerColor}`;
+    oldOverlay.style.backgroundColor = oldPlayerColor;
+    
+    // Add old card content
+    if (!oldCard.faceDown) {
+        const oldValueDiv = document.createElement('div');
+        oldValueDiv.className = 'card-value';
+        oldValueDiv.style.fontSize = '20px';
+        oldValueDiv.style.color = oldSuitColor;
+        oldValueDiv.textContent = oldCard.suit === 'joker' ? '★' : oldCard.value;
+        oldOverlay.appendChild(oldValueDiv);
+        
+        const oldSuitDiv = document.createElement('div');
+        oldSuitDiv.className = 'card-suit';
+        oldSuitDiv.style.fontSize = '22px';
+        oldSuitDiv.style.color = oldSuitColor;
+        oldSuitDiv.textContent = getSuitSymbol(oldCard.suit);
+        oldOverlay.appendChild(oldSuitDiv);
+    }
+    
+    // Create new card overlay (starts hidden)
+    const newOverlay = document.createElement('div');
+    newOverlay.className = 'card card-fade-overlay replacement-new';
+    
+    // Position new card overlay (same position)
+    newOverlay.style.position = 'absolute';
+    newOverlay.style.left = (canvasRect.left + pos.x - 24) + 'px';
+    newOverlay.style.top = (canvasRect.top + pos.y - 32) + 'px';
+    newOverlay.style.width = '48px';
+    newOverlay.style.height = '64px';
+    newOverlay.style.zIndex = '1004';
+    newOverlay.style.pointerEvents = 'none';
+    newOverlay.style.opacity = '0';
+    newOverlay.style.transform = 'scale(0.5)';
+    
+    // Style new card
+    const newPlayerColor = getPlayerColor(newCard);
+    const newSuitColor = getSuitColor(newCard.suit, newCard);
+    newOverlay.style.border = `2px solid ${newPlayerColor}`;
+    newOverlay.style.backgroundColor = newPlayerColor;
+    
+    // Add new card content
+    if (!newCard.faceDown) {
+        const newValueDiv = document.createElement('div');
+        newValueDiv.className = 'card-value';
+        newValueDiv.style.fontSize = '20px';
+        newValueDiv.style.color = newSuitColor;
+        newValueDiv.textContent = newCard.suit === 'joker' ? '★' : newCard.value;
+        newOverlay.appendChild(newValueDiv);
+        
+        const newSuitDiv = document.createElement('div');
+        newSuitDiv.className = 'card-suit';
+        newSuitDiv.style.fontSize = '22px';
+        newSuitDiv.style.color = newSuitColor;
+        newSuitDiv.textContent = getSuitSymbol(newCard.suit);
+        newOverlay.appendChild(newSuitDiv);
+    }
+    
+    // Add to DOM
+    document.body.appendChild(oldOverlay);
+    document.body.appendChild(newOverlay);
+    fadeOutElements.push(oldOverlay, newOverlay);
+    
+    // Start animation sequence
+    requestAnimationFrame(() => {
+        // Old card fades out and shrinks
+        oldOverlay.classList.add('fade-out');
+        
+        // After a longer delay, new card appears and grows (show old card longer)
+        setTimeout(() => {
+            newOverlay.classList.add('fade-in');
+        }, 800);
+    });
+    
+    // Clean up after animation (extended to accommodate longer old card display)
+    setTimeout(() => {
+        [oldOverlay, newOverlay].forEach(overlay => {
+            if (overlay.parentNode) {
+                overlay.parentNode.removeChild(overlay);
+            }
+        });
+        fadeOutElements = fadeOutElements.filter(el => el !== oldOverlay && el !== newOverlay);
+        updateCanvas(); // Refresh canvas after animation
+    }, 1800);
+}
+
+// Attack animation - shows attacker cards briefly
+function startAttackAnimation(attackers, targetPosition) {
+    if (!attackers || attackers.length === 0) return;
+    
+    const canvas = document.getElementById('hex-canvas');
+    const canvasRect = canvas.getBoundingClientRect();
+    
+    // Get target position for animation direction
+    const targetPos = hexToPixel(targetPosition[1], targetPosition[0]);
+    
+    attackers.forEach((attacker, index) => {
+        const attackerCard = attacker.card || attacker; // Handle both {card, position} and direct card objects
+        const attackerPos = attacker.position || findCardPosition(attackerCard);
+        
+        if (!attackerPos) return;
+        
+        const pos = hexToPixel(attackerPos[1], attackerPos[0]);
+        
+        // Create attacker overlay
+        const overlay = document.createElement('div');
+        overlay.className = 'card card-fade-overlay attacker-highlight';
+        
+        // Position overlay over attacker
+        overlay.style.position = 'absolute';
+        overlay.style.left = (canvasRect.left + pos.x - 28) + 'px'; // Slightly larger for attack highlight
+        overlay.style.top = (canvasRect.top + pos.y - 36) + 'px';
+        overlay.style.width = '56px';  // Larger for emphasis
+        overlay.style.height = '72px';
+        overlay.style.zIndex = '1005';
+        overlay.style.pointerEvents = 'none';
+        
+        // Style attacker card with attack effects
+        const playerColor = getPlayerColor(attackerCard);
+        const suitColor = getSuitColor(attackerCard.suit, attackerCard);
+        overlay.style.border = `3px solid #ffd700`; // Gold border for attacking
+        overlay.style.backgroundColor = playerColor;
+        overlay.style.boxShadow = '0 0 20px rgba(255, 215, 0, 0.8), 0 0 40px rgba(255, 215, 0, 0.4)';
+        
+        // Add special styling for leaders
+        if (attackerCard.suit === 'joker') {
+            overlay.classList.add('joker', `player${attackerCard.owner}`);
+        }
+        
+        // Add card content
+        if (!attackerCard.faceDown) {
+            const valueDiv = document.createElement('div');
+            valueDiv.className = 'card-value';
+            valueDiv.style.fontSize = '22px';
+            valueDiv.style.color = suitColor;
+            valueDiv.style.textShadow = '0 0 10px #ffd700';
+            valueDiv.textContent = attackerCard.suit === 'joker' ? '★' : attackerCard.value;
+            overlay.appendChild(valueDiv);
+            
+            const suitDiv = document.createElement('div');
+            suitDiv.className = 'card-suit';
+            suitDiv.style.fontSize = '24px';
+            suitDiv.style.color = suitColor;
+            suitDiv.style.textShadow = '0 0 10px #ffd700';
+            suitDiv.textContent = getSuitSymbol(attackerCard.suit);
+            overlay.appendChild(suitDiv);
+        }
+        
+        // Add attack indicator
+        const attackDiv = document.createElement('div');
+        attackDiv.style.position = 'absolute';
+        attackDiv.style.top = '-10px';
+        attackDiv.style.right = '-10px';
+        attackDiv.style.fontSize = '16px';
+        attackDiv.style.color = '#ff4444';
+        attackDiv.style.textShadow = '0 0 5px #ff4444';
+        attackDiv.textContent = '⚔️';
+        overlay.appendChild(attackDiv);
+        
+        // Add to DOM
+        document.body.appendChild(overlay);
+        fadeOutElements.push(overlay);
+        
+        // Stagger the animation start for multiple attackers
+        setTimeout(() => {
+            requestAnimationFrame(() => {
+                overlay.classList.add('attacking');
+            });
+        }, index * 100);
+        
+        // Clean up after animation
+        setTimeout(() => {
+            if (overlay.parentNode) {
+                overlay.parentNode.removeChild(overlay);
+            }
+            fadeOutElements = fadeOutElements.filter(el => el !== overlay);
+        }, 1500 + (index * 100));
+    });
+}
+
 // Game initialization
 function initGame(preserveAISettings = false) {
     // Initialize canvas
@@ -4853,13 +5314,10 @@ function initGame(preserveAISettings = false) {
     
     // Add event listeners
     canvas.addEventListener('click', handleCanvasClick);
-    canvas.addEventListener('dblclick', handleCanvasDoubleClick);
-    canvas.addEventListener('mousedown', handleMapDragStart);
+    canvas.addEventListener('mousedown', handleMouseDown);
     canvas.addEventListener('mousemove', handleMouseMove);
-    canvas.addEventListener('mouseup', handleMapDragEnd);
+    canvas.addEventListener('mouseup', handleMouseUp);
     canvas.addEventListener('wheel', handleMapZoom);
-    canvas.addEventListener('dragover', handleCanvasDragOver);
-    canvas.addEventListener('drop', handleCanvasDrop);
     
     // Add touch event support for mobile
     canvas.addEventListener('touchstart', handleTouchStart, { passive: false });
@@ -4870,11 +5328,10 @@ function initGame(preserveAISettings = false) {
     
     // Set up menu close functionality
     document.addEventListener('click', handleMenuClose);
+    document.addEventListener('touchend', handleMenuClose);
     
-    // Set up hand container as drop target
+    // Set up hand container reference
     const handContainer = document.getElementById('player-hand');
-    handContainer.addEventListener('dragover', handleHandDragOver);
-    handContainer.addEventListener('drop', handleHandDrop);
     
     // Only reset AI settings on page load, not during "New Game"
     if (!preserveAISettings) {
@@ -4934,6 +5391,9 @@ function initGame(preserveAISettings = false) {
     // Initialize board (for both new and loaded games)
     updateCanvas();
     updateUI();
+    
+    // Initialize draggable overlays for board cards
+    updateBoardCardOverlays();
     
     // Initialize cursor
     updateCursor(null, null);
@@ -5030,11 +5490,21 @@ function resizeCanvas() {
 }
 
 function handleMouseMove(event) {
+    const coords = getCanvasCoordinates(event);
+    
+    // Track mouse position for drag visuals
+    lastMousePos = { x: event.clientX, y: event.clientY };
+    
+    // Handle unified drag system
+    if (dragState.isDragging) {
+        handleDragMove(event, coords);
+        return; // Don't process other mouse move logic during drag
+    }
+    
     // Handle map dragging first
     handleMapDrag(event);
     
     // Then handle hex hovering for coordinate display
-    const coords = getCanvasCoordinates(event);
     let scaledX = coords.x;
     let scaledY = coords.y;
     
@@ -5061,8 +5531,12 @@ function handleMouseMove(event) {
         updateCursor(hex.row, hex.col);
         
         // Redraw if hover changed or attack target changed
-        if (JSON.stringify(prevHovered) !== JSON.stringify(hoveredHex) || 
-            JSON.stringify(prevAttackTarget) !== JSON.stringify(hoveredAttackTarget)) {
+        const hoverChanged = !prevHovered !== !hoveredHex || 
+                            (prevHovered && hoveredHex && (prevHovered[0] !== hoveredHex[0] || prevHovered[1] !== hoveredHex[1]));
+        const attackTargetChanged = !prevAttackTarget !== !hoveredAttackTarget || 
+                                   (prevAttackTarget && hoveredAttackTarget && (prevAttackTarget[0] !== hoveredAttackTarget[0] || prevAttackTarget[1] !== hoveredAttackTarget[1]));
+        
+        if (hoverChanged || attackTargetChanged) {
             updateCanvas();
         }
     } else {
@@ -5075,9 +5549,1333 @@ function handleMouseMove(event) {
         updateCursor(null, null);
         
         // Redraw if hover changed
-        if (JSON.stringify(prevHovered) !== JSON.stringify(hoveredHex)) {
+        const hoverChanged = !prevHovered !== !hoveredHex || 
+                            (prevHovered && hoveredHex && (prevHovered[0] !== hoveredHex[0] || prevHovered[1] !== hoveredHex[1]));
+        
+        if (hoverChanged) {
             updateCanvas();
         }
+    }
+}
+
+function handleMouseDown(event) {
+    // Check if any desktop drag is already in progress
+    if (handDesktopDragState.isDragging || desktopDragState.isDragging) {
+        return; // Let the specific drag handlers manage the event
+    }
+    
+    // Only handle map dragging now - board card dragging uses custom mouse handlers
+    handleMapDragStart(event);
+}
+
+function handleMouseUp(event) {
+    // Check if any desktop drag is in progress
+    if (handDesktopDragState.isDragging || desktopDragState.isDragging) {
+        return; // Let the specific drag handlers manage the event
+    }
+    
+    if (dragState.isDragging) {
+        handleDragEnd(event);
+    } else {
+        // Handle map drag end
+        handleMapDragEnd(event);
+    }
+}
+
+// Unified drag start function
+function startCardDrag(card, hex, x, y, dragType) {
+    dragState.isDragging = true;
+    dragState.dragType = dragType;
+    dragState.draggedCard = card;
+    dragState.startX = x;
+    dragState.startY = y;
+    dragState.startHex = hex;
+    dragState.currentHex = hex;
+    
+    // Legacy compatibility
+    isDraggingCard = true;
+    draggedCard = card;
+    
+    // Check if this card is part of a multi-selection
+    const isMultiSelected = gameState.selectedCards && gameState.selectedCards.some(selected => selected.card === card);
+    
+    if (isMultiSelected) {
+        // This is a combined attack drag - keep multi-selection
+        dragState.dragType = 'card-attack';
+        console.log(`Started combined attack drag with ${gameState.selectedCards.length} cards`);
+    } else if (dragType === 'card-move') {
+        // Clear any existing selections for single card drag
+        clearSelection();
+        selectCard(card, hex.row, hex.col);
+        console.log(`Started single card drag with ${card.value}${card.suit}`);
+    }
+}
+
+// Unified drag move handler
+function handleDragMove(event, coords) {
+    const hex = pixelToHex(coords.x, coords.y);
+    
+    if (hex && hex.row >= 0 && hex.row < 11 && hex.col >= 0 && hex.col < 11 && isValidHex(hex.row, hex.col)) {
+        const prevHex = dragState.currentHex;
+        dragState.currentHex = hex;
+        
+        // Update hover state
+        hoveredHex = [hex.row, hex.col];
+        
+        if (dragState.dragType === 'card-move') {
+            // Check if we're hovering over an enemy card for attack preview
+            const targetCard = gameState.board[hex.row][hex.col];
+            if (targetCard && targetCard.owner !== dragState.draggedCard.owner) {
+                // Show attack preview - only calculate if hex actually changed
+                if (gameState.validAttacks && gameState.validAttacks.some(([r, c]) => r === hex.row && c === hex.col)) {
+                    const prevTarget = hoveredAttackTarget;
+                    hoveredAttackTarget = [hex.row, hex.col];
+                    // Only recalculate if target changed
+                    if (!prevTarget || prevTarget[0] !== hex.row || prevTarget[1] !== hex.col) {
+                        attackPreviewResults = calculateAttackResults(hex.row, hex.col);
+                    }
+                }
+            } else {
+                hoveredAttackTarget = null;
+                attackPreviewResults = null;
+            }
+        }
+        
+        // Update coordinate display only if hex changed
+        if (!prevHex || prevHex.row !== hex.row || prevHex.col !== hex.col) {
+            updateCoordinateDisplay(hex.col, hex.row, event.clientX, event.clientY);
+        }
+        
+        // Redraw if hex changed - use throttled rendering for better performance
+        if (!prevHex || prevHex.row !== hex.row || prevHex.col !== hex.col) {
+            requestDragUpdate();
+        }
+    }
+}
+
+// Unified drag end handler
+function handleDragEnd(event) {
+    if (!dragState.isDragging) return;
+    
+    const coords = getCanvasCoordinates(event);
+    const hex = pixelToHex(coords.x, coords.y);
+    
+    console.log(`Ending ${dragState.dragType} drag`);
+    
+    if (hex && hex.row >= 0 && hex.row < 11 && hex.col >= 0 && hex.col < 11 && isValidHex(hex.row, hex.col)) {
+        if (dragState.dragType === 'card-move') {
+            handleCardDragEnd(hex);
+        } else if (dragState.dragType === 'hand-summon') {
+            handleHandSummonDragEnd(hex);
+        }
+    }
+    
+    // Reset drag state
+    resetDragState();
+}
+
+function handleCardDragEnd(targetHex) {
+    const card = dragState.draggedCard;
+    const startHex = dragState.startHex;
+    
+    // Check if this is a combined attack (multi-selection)
+    const isMultiSelected = gameState.selectedCards && gameState.selectedCards.some(selected => selected.card === card);
+    
+    if (isMultiSelected) {
+        // This is a combined attack
+        const targetCard = gameState.board[targetHex.row][targetHex.col];
+        if (targetCard && targetCard.owner !== card.owner) {
+            // Perform combined attack if it's a valid target
+            if (gameState.validAttacks && gameState.validAttacks.some(([r, c]) => r === targetHex.row && c === targetHex.col)) {
+                performCombinedAttack(targetHex.row, targetHex.col);
+                return;
+            }
+        }
+        console.log('Invalid combined attack target');
+        return;
+    }
+    
+    // Single card actions
+    // Check if we're attacking an enemy card
+    const targetCard = gameState.board[targetHex.row][targetHex.col];
+    if (targetCard && targetCard.owner !== card.owner) {
+        // Perform attack if it's a valid target
+        if (gameState.validAttacks && gameState.validAttacks.some(([r, c]) => r === targetHex.row && c === targetHex.col)) {
+            performAttack(targetHex.row, targetHex.col);
+            return;
+        }
+    }
+    
+    // Check if we're moving to a valid move position
+    if (gameState.validMoves && gameState.validMoves.some(([r, c]) => r === targetHex.row && c === targetHex.col)) {
+        moveCard(startHex.row, startHex.col, targetHex.row, targetHex.col, card);
+        return;
+    }
+    
+    // If drag ends on the same position, it's just a selection (equivalent to click)
+    if (startHex.row === targetHex.row && startHex.col === targetHex.col) {
+        // Select the card and show its valid moves/attacks (like clicking)
+        selectCard(card, startHex.row, startHex.col);
+        return;
+    }
+    
+    // Invalid drop - do nothing
+    console.log('Invalid drag target');
+}
+
+function resetDragState() {
+    dragState.isDragging = false;
+    dragState.dragType = null;
+    dragState.draggedCard = null;
+    dragState.startHex = null;
+    dragState.currentHex = null;
+    
+    // Legacy compatibility
+    isDraggingCard = false;
+    draggedCard = null;
+    
+    // Clear attack preview
+    hoveredAttackTarget = null;
+    attackPreviewResults = null;
+    
+    updateCanvas();
+}
+
+// Create invisible draggable overlays for board cards
+function updateBoardCardOverlays() {
+    // Remove existing overlays
+    const existingOverlays = document.querySelectorAll('.board-card-overlay');
+    existingOverlays.forEach(overlay => overlay.remove());
+    
+    // Create new overlays for each draggable card
+    for (let row = 0; row < 11; row++) {
+        for (let col = 0; col < 11; col++) {
+            if (!isValidHex(row, col)) continue;
+            
+            const card = gameState.board[row][col];
+            if (card && card.owner === gameState.currentPlayer && !isCardExhausted(card)) {
+                createBoardCardOverlay(card, row, col);
+            }
+        }
+    }
+}
+
+function createBoardCardOverlay(card, row, col) {
+    const pos = hexToPixel(col, row);
+    const canvas = document.getElementById('hex-canvas');
+    const canvasRect = canvas.getBoundingClientRect();
+    
+    // Create invisible draggable element
+    const overlay = document.createElement('div');
+    overlay.className = 'board-card-overlay';
+    overlay.dataset.cardId = card.id;
+    overlay.dataset.row = row;
+    overlay.dataset.col = col;
+    
+    // Position over the card - make touch targets larger on mobile
+    const hexRadius = hexSize * (isTouchDevice ? 1.0 : 0.8); // Larger touch targets on mobile
+    overlay.style.position = 'absolute';
+    overlay.style.left = `${canvasRect.left + pos.x - hexRadius}px`;
+    overlay.style.top = `${canvasRect.top + pos.y - hexRadius}px`;
+    overlay.style.width = `${hexRadius * 2}px`;
+    overlay.style.height = `${hexRadius * 2}px`;
+    overlay.style.backgroundColor = 'transparent';
+    overlay.style.cursor = isTouchDevice ? 'default' : 'grab';
+    overlay.style.zIndex = '1000';
+    overlay.style.pointerEvents = 'auto';
+    
+    // Show grab cursor on hover for desktop
+    if (!isTouchDevice) {
+        overlay.addEventListener('mouseenter', () => {
+            overlay.style.cursor = 'grab';
+        });
+        overlay.addEventListener('mouseleave', () => {
+            overlay.style.cursor = 'grab';
+        });
+    }
+    
+    if (isTouchDevice) {
+        // Mobile touch-based drag
+        overlay.addEventListener('touchstart', (e) => handleBoardCardTouchStart(e, card, row, col), { passive: false });
+        overlay.addEventListener('touchmove', handleBoardCardTouchMove, { passive: false });
+        overlay.addEventListener('touchend', handleBoardCardTouchEnd, { passive: false });
+        
+
+    } else {
+        // Desktop mouse-based drag (same logic as mobile)
+        overlay.addEventListener('mousedown', (e) => handleBoardCardMouseStart(e, card, row, col));
+        overlay.addEventListener('mousemove', handleBoardCardMouseMove);
+        overlay.addEventListener('mouseup', handleBoardCardMouseEnd);
+        // Prevent default drag behavior
+        overlay.draggable = false;
+        
+
+    }
+    
+    document.body.appendChild(overlay);
+}
+
+// Desktop mouse handlers for board card dragging (mirrors mobile touch logic)
+let desktopDragState = {
+    isDragging: false,
+    draggedCard: null,
+    startRow: null,
+    startCol: null,
+    startX: 0,
+    startY: 0,
+    currentX: 0,
+    currentY: 0
+};
+
+function handleBoardCardMouseStart(e, card, row, col) {
+    e.preventDefault();
+    e.stopPropagation();
+    
+    // Set up desktop drag state
+    desktopDragState.isDragging = true;
+    desktopDragState.draggedCard = card;
+    desktopDragState.startRow = row;
+    desktopDragState.startCol = col;
+    desktopDragState.startX = e.clientX;
+    desktopDragState.startY = e.clientY;
+    desktopDragState.currentX = e.clientX;
+    desktopDragState.currentY = e.clientY;
+    
+    // Set up unified drag state for visual feedback
+    dragState.isDragging = true;
+    dragState.dragType = 'card-move';
+    dragState.draggedCard = card;
+    dragState.startHex = { row, col };
+    dragState.startX = e.clientX;
+    dragState.startY = e.clientY;
+    
+    // Update mouse position for visual feedback
+    lastMousePos = { x: e.clientX, y: e.clientY };
+    
+    // Clear any existing selections when starting drag
+    selectedCards = [];
+    
+    // Show valid moves and attacks for the dragged card
+    showValidMovesAndAttacks(card, row, col);
+    
+    // Change cursor to grabbing during drag
+    document.body.style.cursor = 'grabbing';
+    
+    // Add global mouse event listeners for drag continuation
+    document.addEventListener('mousemove', handleBoardCardMouseMove);
+    document.addEventListener('mouseup', handleBoardCardMouseEnd);
+    
+    // Update canvas to show dragging visuals
+    requestDragUpdate();
+}
+
+function handleBoardCardMouseMove(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    
+    if (!desktopDragState.isDragging) return;
+    
+    desktopDragState.currentX = e.clientX;
+    desktopDragState.currentY = e.clientY;
+    
+    // Update mouse position for visual feedback
+    lastMousePos = { x: e.clientX, y: e.clientY };
+    
+    // Update hover preview during drag
+    updateDragHoverPreview(e.clientX, e.clientY, desktopDragState.draggedCard, desktopDragState.startRow, desktopDragState.startCol);
+    
+    // Update canvas for smooth visual feedback
+    requestDragUpdate();
+}
+
+function handleBoardCardMouseEnd(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    
+    if (!desktopDragState.isDragging) return;
+    
+    // Remove global event listeners
+    document.removeEventListener('mousemove', handleBoardCardMouseMove);
+    document.removeEventListener('mouseup', handleBoardCardMouseEnd);
+    
+    // Restore cursor
+    document.body.style.cursor = '';
+    
+    // Calculate drag distance to determine if this was a drag or click
+    const dragDistance = Math.sqrt(
+        Math.pow(desktopDragState.currentX - desktopDragState.startX, 2) +
+        Math.pow(desktopDragState.currentY - desktopDragState.startY, 2)
+    );
+    
+    if (dragDistance < 10) {
+        // Short drag distance - treat as click for selection
+        console.log('Short drag detected, selecting card:', desktopDragState.draggedCard.value + desktopDragState.draggedCard.suit);
+        // Clear original selection so it won't be restored
+        dragState.originalSelection = null;
+        handleMobileCardSelection(desktopDragState.draggedCard, desktopDragState.startRow, desktopDragState.startCol, e.ctrlKey);
+    } else {
+        // Long drag distance - process as drag-and-drop
+        const coords = getCanvasCoordinates({ clientX: desktopDragState.currentX, clientY: desktopDragState.currentY });
+        const targetHex = pixelToHex(coords.x, coords.y);
+        
+        let actionProcessed = false;
+        if (targetHex && isValidHex(targetHex.row, targetHex.col)) {
+            // Check if drag ended at initial position
+            const endedAtInitialPosition = targetHex.row === desktopDragState.startRow && targetHex.col === desktopDragState.startCol;
+            
+            if (endedAtInitialPosition) {
+                // Drag stopped at initial grid - select the card for action and multi-selection
+                // Clear original selection so it won't be restored
+                dragState.originalSelection = null;
+                handleMobileCardSelection(desktopDragState.draggedCard, desktopDragState.startRow, desktopDragState.startCol, e.ctrlKey);
+            } else {
+                // Process the drag action
+                actionProcessed = processBoardCardDrag(desktopDragState.draggedCard, desktopDragState.startRow, desktopDragState.startCol, targetHex.row, targetHex.col);
+                
+                // After drag action, automatically select the card if it has remaining actions
+                if (actionProcessed) {
+                    autoSelectCardAfterDragAction(desktopDragState.draggedCard, targetHex.row, targetHex.col);
+                }
+            }
+        }
+        
+        // If no action was processed and didn't end at initial position, still select the card
+        if (!actionProcessed && targetHex && isValidHex(targetHex.row, targetHex.col) && 
+            !(targetHex.row === desktopDragState.startRow && targetHex.col === desktopDragState.startCol)) {
+            // Clear original selection so it won't be restored
+            dragState.originalSelection = null;
+            handleMobileCardSelection(desktopDragState.draggedCard, desktopDragState.startRow, desktopDragState.startCol, e.ctrlKey);
+        }
+    }
+    
+    // Clean up drag state
+    desktopDragState.isDragging = false;
+    desktopDragState.draggedCard = null;
+    dragState.isDragging = false;
+    dragState.dragType = null;
+    dragState.draggedCard = null;
+    
+    // Clear highlights and previews only if no card is selected after drag
+    // (if a card got selected during drag end, we want to keep its highlights)
+    if (!gameState.selectedCard && (!gameState.selectedCards || gameState.selectedCards.length === 0)) {
+        clearDragHighlights();
+    } else {
+        // Clear only drag-specific state but keep selection highlights
+        hoveredHex = null;
+        hoveredAttackTarget = null;
+        attackPreviewResults = null;
+        // Reset original selection since we're keeping current selection
+        dragState.originalSelection = null;
+    }
+    
+    // Update canvas to remove dragging visuals
+    updateCanvas();
+}
+
+// Mobile touch handlers for board card dragging
+let mobileDragState = {
+    isDragging: false,
+    draggedCard: null,
+    startRow: null,
+    startCol: null,
+    startX: 0,
+    startY: 0,
+    currentX: 0,
+    currentY: 0
+};
+
+function handleBoardCardTouchStart(e, card, row, col) {
+    e.preventDefault();
+    e.stopPropagation();
+    
+    if (e.touches.length !== 1) return;
+    
+    const touch = e.touches[0];
+    
+    // Haptic feedback on supported devices
+    if (navigator.vibrate) {
+        navigator.vibrate(50); // Short vibration
+    }
+    
+    // Set up mobile drag state
+    mobileDragState.isDragging = true;
+    mobileDragState.draggedCard = card;
+    mobileDragState.startRow = row;
+    mobileDragState.startCol = col;
+    mobileDragState.startX = touch.clientX;
+    mobileDragState.startY = touch.clientY;
+    mobileDragState.currentX = touch.clientX;
+    mobileDragState.currentY = touch.clientY;
+    
+    // Set up unified drag state for visual feedback
+    dragState.isDragging = true;
+    dragState.dragType = 'card-move';
+    dragState.draggedCard = card;
+    dragState.startHex = { row, col };
+    dragState.startX = touch.clientX;
+    dragState.startY = touch.clientY;
+    
+    // Update mouse position for visual feedback
+    lastMousePos = { x: touch.clientX, y: touch.clientY };
+    
+    // Clear any existing selections when starting drag
+    selectedCards = [];
+    
+    // Show valid moves and attacks for the dragged card
+    showValidMovesAndAttacks(mobileDragState.draggedCard, mobileDragState.startRow, mobileDragState.startCol);
+    
+    // Update canvas to show dragging visuals
+    requestDragUpdate();
+}
+
+function handleBoardCardTouchMove(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    
+    if (!mobileDragState.isDragging || e.touches.length !== 1) return;
+    
+    const touch = e.touches[0];
+    mobileDragState.currentX = touch.clientX;
+    mobileDragState.currentY = touch.clientY;
+    
+    // Update mouse position for visual feedback
+    lastMousePos = { x: touch.clientX, y: touch.clientY };
+    
+    // Update hover preview during drag
+    updateDragHoverPreview(touch.clientX, touch.clientY, mobileDragState.draggedCard, mobileDragState.startRow, mobileDragState.startCol);
+    
+    // Update canvas for smooth visual feedback
+    requestDragUpdate();
+}
+
+function handleBoardCardTouchEnd(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    
+    if (!mobileDragState.isDragging) return;
+    
+    // Calculate drag distance to determine if this was a drag or tap
+    const dragDistance = Math.sqrt(
+        Math.pow(mobileDragState.currentX - mobileDragState.startX, 2) +
+        Math.pow(mobileDragState.currentY - mobileDragState.startY, 2)
+    );
+    
+    if (dragDistance < 10) {
+        // Short drag distance - treat as tap for selection
+        console.log('Short touch detected, selecting card:', mobileDragState.draggedCard.value + mobileDragState.draggedCard.suit);
+        // Clear original selection so it won't be restored
+        dragState.originalSelection = null;
+        handleMobileCardSelection(mobileDragState.draggedCard, mobileDragState.startRow, mobileDragState.startCol, false);
+    } else {
+        // Long drag distance - process as drag-and-drop
+        const coords = getCanvasCoordinates({ clientX: mobileDragState.currentX, clientY: mobileDragState.currentY });
+        const targetHex = pixelToHex(coords.x, coords.y);
+        
+        let actionProcessed = false;
+        if (targetHex && isValidHex(targetHex.row, targetHex.col)) {
+            // Check if drag ended at initial position
+            const endedAtInitialPosition = targetHex.row === mobileDragState.startRow && targetHex.col === mobileDragState.startCol;
+            
+            if (endedAtInitialPosition) {
+                // Drag stopped at initial grid - select the card for action and multi-selection
+                // Clear original selection so it won't be restored
+                dragState.originalSelection = null;
+                handleMobileCardSelection(mobileDragState.draggedCard, mobileDragState.startRow, mobileDragState.startCol, false);
+            } else {
+                // Process the drag action
+                actionProcessed = processBoardCardDrag(mobileDragState.draggedCard, mobileDragState.startRow, mobileDragState.startCol, targetHex.row, targetHex.col);
+                
+                // After drag action, automatically select the card if it has remaining actions
+                if (actionProcessed) {
+                    autoSelectCardAfterDragAction(mobileDragState.draggedCard, targetHex.row, targetHex.col);
+                }
+            }
+        }
+        
+        // If no action was processed and didn't end at initial position, still select the card  
+        if (!actionProcessed && targetHex && isValidHex(targetHex.row, targetHex.col) && 
+            !(targetHex.row === mobileDragState.startRow && targetHex.col === mobileDragState.startCol)) {
+            // Clear original selection so it won't be restored
+            dragState.originalSelection = null;
+            handleMobileCardSelection(mobileDragState.draggedCard, mobileDragState.startRow, mobileDragState.startCol, false);
+        }
+    }
+    
+    // Clean up drag state
+    mobileDragState.isDragging = false;
+    mobileDragState.draggedCard = null;
+    dragState.isDragging = false;
+    dragState.dragType = null;
+    dragState.draggedCard = null;
+    
+    // Clear highlights and previews only if no card is selected after drag
+    // (if a card got selected during drag end, we want to keep its highlights)
+    if (!gameState.selectedCard && (!gameState.selectedCards || gameState.selectedCards.length === 0)) {
+        clearDragHighlights();
+    } else {
+        // Clear only drag-specific state but keep selection highlights
+        hoveredHex = null;
+        hoveredAttackTarget = null;
+        attackPreviewResults = null;
+        // Reset original selection since we're keeping current selection
+        dragState.originalSelection = null;
+    }
+    
+    // Update canvas to remove dragging visuals
+    updateCanvas();
+}
+
+function handleBoardCardSelection(card, row, col) {
+    // Handle card selection (for multi-select or single selection)
+    const cardIndex = selectedCards.findIndex(selected => 
+        selected.card.id === card.id && selected.row === row && selected.col === col
+    );
+    
+    if (cardIndex >= 0) {
+        // Card is already selected, deselect it
+        selectedCards.splice(cardIndex, 1);
+    } else {
+        // Add card to selection
+        selectedCards.push({ card, row, col });
+    }
+    
+    updateCanvas();
+}
+
+function processBoardCardDrag(card, startRow, startCol, targetRow, targetCol) {
+    // Check if this is a valid move or attack
+    const startHex = { row: startRow, col: startCol };
+    const targetHex = { row: targetRow, col: targetCol };
+    
+    // Check for movement
+    if (!gameState.board[targetRow][targetCol]) {
+        // Empty hex - try to move
+        if (canMoveCard(card, startHex, targetHex)) {
+            // Save state before moving
+            saveStateToHistory();
+            moveCard(startRow, startCol, targetRow, targetCol);
+            
+            // Clear drag highlights and handle post-move selection
+            clearDragHighlights();
+            
+            // Check if card can still attack after moving
+            const newValidAttacks = getValidAttacks(card, targetRow, targetCol);
+            if (newValidAttacks.length > 0) {
+                // Keep card selected for attacks
+                gameState.selectedCard = card;
+                gameState.selectedHex = [targetRow, targetCol];
+                gameState.validMoves = []; // Can't move again
+                gameState.validAttacks = newValidAttacks;
+                gameState.blockedMoves = getBlockedMoves(card, targetRow, targetCol);
+                gameState.absorptions = getAbsorptions(card, targetRow, targetCol);
+            } else {
+                // Card is done, clear everything
+                clearSelection();
+            }
+            
+            // Update canvas to refresh visual indicators
+            updateCanvas();
+            return true; // Action processed successfully
+        }
+    } else {
+        // Occupied hex - try to attack
+        const targetCard = gameState.board[targetRow][targetCol];
+        if (targetCard.owner !== gameState.currentPlayer && canAttackCard(card, startHex, targetCard, targetHex)) {
+            // Save state before attacking
+            saveStateToHistory();
+            // Perform attack
+            attack(startRow, startCol, targetRow, targetCol);
+            
+            // Clear drag highlights and selection after attack
+            clearDragHighlights();
+            clearSelection();
+            
+            // Update canvas to refresh visual indicators  
+            updateCanvas();
+            return true; // Action processed successfully
+        }
+    }
+    
+    // Invalid action - show feedback
+    showInvalidActionFeedback();
+    return false; // No action processed
+}
+
+function showInvalidActionFeedback() {
+    // Visual feedback for invalid actions
+    // Could add a brief red flash or other indication
+    console.log("Invalid action");
+}
+
+function autoSelectCardAfterDragAction(draggedCard, finalRow, finalCol) {
+    // Check if the card still has actions available after the drag
+    // This should happen after the card has moved to its final position
+    
+    // For movement actions, the card should be at the final position
+    // For attack actions, the card should still be at its original position
+    const cardPosition = findCardPosition(draggedCard);
+    if (!cardPosition) {
+        // Card was destroyed in battle or moved off board
+        return;
+    }
+    
+    const [currentRow, currentCol] = cardPosition;
+    
+    // Check if card is exhausted or has no remaining actions
+    if (isCardExhausted(draggedCard)) {
+        return;
+    }
+    
+    // Check for remaining actions
+    const hasMovement = !gameState.cardsMovedThisTurn.has(draggedCard.id) && getValidMoves(draggedCard, currentRow, currentCol).length > 0;
+    const hasAttacks = !gameState.cardsAttackedThisTurn.has(draggedCard.id) && getValidAttacks(draggedCard, currentRow, currentCol).length > 0;
+    
+    // Auto-select the card if it has remaining actions
+    if (hasMovement || hasAttacks) {
+        // Add a small delay so user can see the action completed before new selection
+        setTimeout(() => {
+            // Clear any existing selection first
+            clearSelection();
+            
+            // Select the card for additional actions
+            selectCard(draggedCard, currentRow, currentCol);
+            console.log(`Auto-selected ${draggedCard.value}${draggedCard.suit} for additional actions`);
+        }, 200); // 200ms delay for better UX
+    }
+}
+
+function showValidMovesAndAttacks(card, row, col) {
+    // Clear previous highlights
+    gameState.validMoves = [];
+    gameState.validAttacks = [];
+    gameState.blockedMoves = [];
+    gameState.absorptions = [];
+    hoveredHex = null;
+    hoveredAttackTarget = null;
+    attackPreviewResults = null;
+    
+    // Temporarily set selection state for visual consistency during drag
+    // Store original selection to restore later
+    if (!dragState.originalSelection) {
+        dragState.originalSelection = {
+            selectedCard: gameState.selectedCard,
+            selectedHex: gameState.selectedHex,
+            selectedCards: [...(gameState.selectedCards || [])]
+        };
+    }
+    
+    // Set drag selection state BEFORE calculating moves/attacks (mimics card selection for visual purposes)
+    // This ensures face down cards are treated as selected and behave like face up cards
+    gameState.selectedCard = card;
+    gameState.selectedHex = [row, col];
+    
+    // Get all the same information as card selection (now with card properly marked as selected)
+    gameState.validMoves = getValidMoves(card, row, col);
+    gameState.validAttacks = getValidAttacks(card, row, col);
+    gameState.blockedMoves = getBlockedMoves(card, row, col);
+    gameState.absorptions = getAbsorptions(card, row, col);
+    
+    // Update canvas to show highlights
+    updateCanvas();
+}
+
+function showValidSummonPositions(card) {
+    // Clear previous highlights
+    gameState.validMoves = [];
+    gameState.validAttacks = [];
+    gameState.blockedMoves = [];
+    gameState.absorptions = [];
+    hoveredHex = null;
+    hoveredAttackTarget = null;
+    attackPreviewResults = null;
+    
+    if (gameState.phase === 'setup') {
+        // In setup phase, show all valid hexes
+        gameState.validMoves = [];
+        for (let r = 0; r < 11; r++) {
+            for (let c = 0; c < 11; c++) {
+                if (isValidHex(r, c) && canSummonCard(card, r, c)) {
+                    gameState.validMoves.push([r, c]);
+                }
+            }
+        }
+    } else {
+        // In play phase, use the same logic as handleHandCardSelection
+        const leaderPos = findLeaderPosition(gameState.currentPlayer);
+        if (leaderPos && !gameState.leaderAttackedThisTurn) {
+            const mapCounts = countCardsOnMap(gameState.currentPlayer);
+            const isAtMaxCapacity = mapCounts.leaderCount >= 1 && mapCounts.regularCards >= 5;
+            const neighbors = getHexNeighbors(leaderPos[0], leaderPos[1]);
+            
+            if (isAtMaxCapacity) {
+                // At max capacity - only show positions with existing cards to replace
+                gameState.validMoves = neighbors.filter(([r, c]) => {
+                    const existingCard = gameState.board[r][c];
+                    return existingCard && existingCard.owner === gameState.currentPlayer;
+                });
+                // All valid moves will result in discarding the existing card
+                validDiscards = [...gameState.validMoves];
+            } else {
+                // Not at max - show all valid summoning positions (empty or own cards)
+                gameState.validMoves = neighbors.filter(([r, c]) => {
+                    const existingCard = gameState.board[r][c];
+                    return !existingCard || existingCard.owner === gameState.currentPlayer;
+                });
+                // Only positions with existing friendly cards will be discarded
+                validDiscards = neighbors.filter(([r, c]) => {
+                    const existingCard = gameState.board[r][c];
+                    return existingCard && existingCard.owner === gameState.currentPlayer;
+                });
+            }
+        }
+    }
+    
+    // Update canvas to show highlights
+    updateCanvas();
+}
+
+function updateDragHoverPreview(clientX, clientY, card, startRow, startCol) {
+    // Get the hex under the cursor
+    const coords = getCanvasCoordinates({ clientX, clientY });
+    const targetHex = pixelToHex(coords.x, coords.y);
+    
+    if (!targetHex || !isValidHex(targetHex.row, targetHex.col)) {
+        // Clear hover preview if not over valid hex
+        hoveredHex = null;
+        hoveredAttackTarget = null;
+        attackPreviewResults = null;
+        return;
+    }
+    
+    hoveredHex = [targetHex.row, targetHex.col];
+    const targetCard = gameState.board[targetHex.row][targetHex.col];
+    
+    if (!targetCard) {
+        // Empty hex - check if it's a valid move
+        if (gameState.validMoves && gameState.validMoves.some(([r, c]) => r === targetHex.row && c === targetHex.col)) {
+            // Valid move target
+            hoveredAttackTarget = null;
+            attackPreviewResults = null;
+        } else {
+            // Invalid move target
+            hoveredHex = null;
+        }
+    } else if (targetCard.owner !== card.owner) {
+        // Enemy card - check if it's a valid attack
+        if (gameState.validAttacks && gameState.validAttacks.some(([r, c]) => r === targetHex.row && c === targetHex.col)) {
+            // Valid attack target - show preview
+            hoveredAttackTarget = [targetHex.row, targetHex.col];
+            attackPreviewResults = calculateAttackPreview([{card, row: startRow, col: startCol}], targetHex.row, targetHex.col);
+        } else {
+            // Invalid attack target
+            hoveredHex = null;
+            hoveredAttackTarget = null;
+            attackPreviewResults = null;
+        }
+    } else {
+        // Own card - not a valid target
+        hoveredHex = null;
+        hoveredAttackTarget = null;
+        attackPreviewResults = null;
+    }
+}
+
+function updateHandDragHoverPreview(clientX, clientY, card) {
+    // Get the hex under the cursor
+    const coords = getCanvasCoordinates({ clientX, clientY });
+    const targetHex = pixelToHex(coords.x, coords.y);
+    
+    if (!targetHex || !isValidHex(targetHex.row, targetHex.col)) {
+        // Clear hover preview if not over valid hex
+        hoveredHex = null;
+        return;
+    }
+    
+    // Check if this is a valid summoning position
+    if (gameState.validMoves && gameState.validMoves.some(([r, c]) => r === targetHex.row && c === targetHex.col)) {
+        hoveredHex = [targetHex.row, targetHex.col];
+    } else {
+        hoveredHex = null;
+    }
+}
+
+function clearDragHighlights() {
+    // Restore original selection state if it was stored
+    if (dragState.originalSelection) {
+        gameState.selectedCard = dragState.originalSelection.selectedCard;
+        gameState.selectedHex = dragState.originalSelection.selectedHex;
+        gameState.selectedCards = dragState.originalSelection.selectedCards;
+        dragState.originalSelection = null;
+    }
+    
+    // Clear all drag-related highlights and previews
+    gameState.validMoves = [];
+    gameState.validAttacks = [];
+    gameState.blockedMoves = [];
+    gameState.absorptions = [];
+    hoveredHex = null;
+    hoveredAttackTarget = null;
+    attackPreviewResults = null;
+}
+
+function calculateAttackPreview(selectedCards, targetRow, targetCol) {
+    const target = gameState.board[targetRow][targetCol];
+    if (!target) return null;
+    
+    // Don't show attack results when target is face down
+    if (target.faceDown && target.owner !== gameState.currentPlayer) {
+        return null;
+    }
+    
+    let attackers = selectedCards.map(selected => selected.card);
+    let totalAttack = attackers.reduce((sum, card) => sum + card.attack, 0);
+    
+    // Check for spade absorption
+    const firstAttacker = selectedCards[0];
+    const absorber = findSpadeAbsorber(
+        firstAttacker.row, firstAttacker.col, 
+        targetRow, targetCol, target.owner
+    );
+    const actualDefender = absorber || target;
+    
+    const results = {
+        targetCaptured: false,
+        attackersCasualites: [],
+        survivingAttackers: [],
+        actualDefender: actualDefender,
+        totalAttack: totalAttack,
+        isLeaderAttack: false,
+        captureTokensAdded: 0
+    };
+    
+    // Handle different target types
+    if (actualDefender.suit === 'joker') {
+        // Attacking a Leader
+        results.isLeaderAttack = true;
+        results.captureTokensAdded = 3;
+        results.targetCaptured = false; // Leader stays on board
+        results.survivingAttackers = [...attackers]; // All attackers survive (no counter-attack from Leader)
+    } else if (totalAttack >= actualDefender.defense) {
+        // Regular unit is defeated
+        results.targetCaptured = true;
+        results.captureTokensAdded = 1;
+        
+        // Check which attackers survive counter-attack
+        const counterAttack = actualDefender.attack;
+        attackers.forEach(attacker => {
+            if (attacker.defense <= counterAttack) {
+                results.attackersCasualites.push(attacker);
+            } else {
+                results.survivingAttackers.push(attacker);
+            }
+        });
+    } else {
+        // Target survives, check for attacker casualties from counter-attack
+        results.targetCaptured = false;
+        results.captureTokensAdded = 0;
+        
+        const counterAttack = actualDefender.attack;
+        attackers.forEach(attacker => {
+            if (attacker.defense <= counterAttack) {
+                results.attackersCasualites.push(attacker);
+            } else {
+                results.survivingAttackers.push(attacker);
+            }
+        });
+    }
+    
+    return results;
+}
+
+// Desktop mouse handlers for hand card dragging (mirrors mobile touch logic)
+let handDesktopDragState = {
+    isDragging: false,
+    draggedCard: null,
+    startX: 0,
+    startY: 0,
+    currentX: 0,
+    currentY: 0,
+    cardElement: null
+};
+
+function handleHandCardMouseStart(e, card) {
+    e.preventDefault();
+    e.stopPropagation();
+    
+    // Set up desktop drag state
+    handDesktopDragState.isDragging = true;
+    handDesktopDragState.draggedCard = card;
+    handDesktopDragState.startX = e.clientX;
+    handDesktopDragState.startY = e.clientY;
+    handDesktopDragState.currentX = e.clientX;
+    handDesktopDragState.currentY = e.clientY;
+    handDesktopDragState.cardElement = e.target;
+    
+    // Set up unified drag state for visual feedback
+    dragState.isDragging = true;
+    dragState.dragType = 'hand-summon';
+    dragState.draggedCard = card;
+    dragState.startX = e.clientX;
+    dragState.startY = e.clientY;
+    
+    // Update mouse position for visual feedback
+    lastMousePos = { x: e.clientX, y: e.clientY };
+    
+    // Show valid summoning positions for the dragged card
+    showValidSummonPositions(handDesktopDragState.draggedCard);
+    
+    // Change cursor to grabbing during drag
+    document.body.style.cursor = 'grabbing';
+    
+    // Add global mouse event listeners for drag continuation
+    document.addEventListener('mousemove', handleHandCardMouseMove);
+    document.addEventListener('mouseup', handleHandCardMouseEnd);
+    
+    // Update canvas to show dragging visuals
+    requestDragUpdate();
+}
+
+function handleHandCardMouseMove(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    
+    if (!handDesktopDragState.isDragging) return;
+    
+    handDesktopDragState.currentX = e.clientX;
+    handDesktopDragState.currentY = e.clientY;
+    
+    // Update mouse position for visual feedback
+    lastMousePos = { x: e.clientX, y: e.clientY };
+    
+    // Update hover preview during drag
+    updateHandDragHoverPreview(e.clientX, e.clientY, handDesktopDragState.draggedCard);
+    
+    // Update canvas for smooth visual feedback
+    requestDragUpdate();
+}
+
+function handleHandCardMouseEnd(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    
+    if (!handDesktopDragState.isDragging) return;
+    
+    // Remove global event listeners
+    document.removeEventListener('mousemove', handleHandCardMouseMove);
+    document.removeEventListener('mouseup', handleHandCardMouseEnd);
+    
+    // Restore cursor
+    document.body.style.cursor = '';
+    
+    // Calculate drag distance to determine if this was a drag or click
+    const dragDistance = Math.sqrt(
+        Math.pow(handDesktopDragState.currentX - handDesktopDragState.startX, 2) +
+        Math.pow(handDesktopDragState.currentY - handDesktopDragState.startY, 2)
+    );
+    
+    if (dragDistance < 10) {
+        // Short drag distance - treat as click for card selection
+        handleCardClick(handDesktopDragState.draggedCard);
+    } else {
+        // Long drag distance - process as drag-and-drop
+        const coords = getCanvasCoordinates({ clientX: handDesktopDragState.currentX, clientY: handDesktopDragState.currentY });
+        const targetHex = pixelToHex(coords.x, coords.y);
+        
+        if (targetHex && isValidHex(targetHex.row, targetHex.col)) {
+            // Process the hand card summon
+            processHandCardDrag(handDesktopDragState.draggedCard, targetHex.row, targetHex.col);
+        }
+    }
+    
+    // Clean up drag state
+    handDesktopDragState.isDragging = false;
+    handDesktopDragState.draggedCard = null;
+    handDesktopDragState.cardElement = null;
+    dragState.isDragging = false;
+    dragState.dragType = null;
+    dragState.draggedCard = null;
+    
+    // Clear highlights and previews
+    clearDragHighlights();
+    
+    // Update canvas to remove dragging visuals
+    updateCanvas();
+}
+
+// Mobile touch handlers for hand card dragging
+let handMobileDragState = {
+    isDragging: false,
+    draggedCard: null,
+    startX: 0,
+    startY: 0,
+    currentX: 0,
+    currentY: 0,
+    cardElement: null
+};
+
+function handleHandCardTouchStart(e, card) {
+    e.preventDefault();
+    e.stopPropagation();
+    
+    if (e.touches.length !== 1) return;
+    
+    const touch = e.touches[0];
+    
+    // Haptic feedback on supported devices
+    if (navigator.vibrate) {
+        navigator.vibrate(50); // Short vibration
+    }
+    
+    // Set up mobile drag state
+    handMobileDragState.isDragging = true;
+    handMobileDragState.draggedCard = card;
+    handMobileDragState.startX = touch.clientX;
+    handMobileDragState.startY = touch.clientY;
+    handMobileDragState.currentX = touch.clientX;
+    handMobileDragState.currentY = touch.clientY;
+    handMobileDragState.cardElement = e.target;
+    
+    // Set up unified drag state for visual feedback
+    dragState.isDragging = true;
+    dragState.dragType = 'hand-summon';
+    dragState.draggedCard = card;
+    dragState.startX = touch.clientX;
+    dragState.startY = touch.clientY;
+    
+    // Update mouse position for visual feedback
+    lastMousePos = { x: touch.clientX, y: touch.clientY };
+    
+    // Show valid summoning positions for the dragged card
+    showValidSummonPositions(handMobileDragState.draggedCard);
+    
+    // Update canvas to show dragging visuals
+    requestDragUpdate();
+}
+
+function handleHandCardTouchMove(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    
+    if (!handMobileDragState.isDragging || e.touches.length !== 1) return;
+    
+    const touch = e.touches[0];
+    handMobileDragState.currentX = touch.clientX;
+    handMobileDragState.currentY = touch.clientY;
+    
+    // Update mouse position for visual feedback
+    lastMousePos = { x: touch.clientX, y: touch.clientY };
+    
+    // Update hover preview during drag
+    updateHandDragHoverPreview(touch.clientX, touch.clientY, handMobileDragState.draggedCard);
+    
+    // Update canvas for smooth visual feedback
+    requestDragUpdate();
+}
+
+function handleHandCardTouchEnd(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    
+    if (!handMobileDragState.isDragging) return;
+    
+    // Calculate drag distance to determine if this was a drag or tap
+    const dragDistance = Math.sqrt(
+        Math.pow(handMobileDragState.currentX - handMobileDragState.startX, 2) +
+        Math.pow(handMobileDragState.currentY - handMobileDragState.startY, 2)
+    );
+    
+    if (dragDistance < 10) {
+        // Short drag distance - treat as tap for card selection
+        handleCardClick(handMobileDragState.draggedCard);
+    } else {
+        // Long drag distance - process as drag-and-drop
+        const coords = getCanvasCoordinates({ clientX: handMobileDragState.currentX, clientY: handMobileDragState.currentY });
+        const targetHex = pixelToHex(coords.x, coords.y);
+        
+        if (targetHex && isValidHex(targetHex.row, targetHex.col)) {
+            // Process the hand card summon
+            processHandCardDrag(handMobileDragState.draggedCard, targetHex.row, targetHex.col);
+        }
+    }
+    
+    // Clean up drag state
+    handMobileDragState.isDragging = false;
+    handMobileDragState.draggedCard = null;
+    handMobileDragState.cardElement = null;
+    dragState.isDragging = false;
+    dragState.dragType = null;
+    dragState.draggedCard = null;
+    
+    // Clear highlights and previews
+    clearDragHighlights();
+    
+    // Update canvas to remove dragging visuals
+    updateCanvas();
+}
+
+function processHandCardDrag(card, targetRow, targetCol) {
+    // Try to summon the card at the target location
+    if (canSummonCard(card, targetRow, targetCol)) {
+        // Select the card and place it
+        gameState.selectedCard = card;
+        handleHexClick(targetRow, targetCol);
+    } else {
+        // Invalid summon location - show feedback
+        showInvalidActionFeedback();
+    }
+}
+
+function canMoveCard(card, startHex, targetHex) {
+    // Check if the card can move from startHex to targetHex
+    if (!card || !startHex || !targetHex) return false;
+    
+    const { row: fromRow, col: fromCol } = startHex;
+    const { row: toRow, col: toCol } = targetHex;
+    
+    // Check if target hex is valid and empty
+    if (!isValidHex(toRow, toCol)) return false;
+    if (gameState.board[toRow][toCol]) return false; // Target hex is occupied
+    
+    // Check if card can make this move according to game rules
+    const validMoves = getValidMoves(card, fromRow, fromCol);
+    return validMoves.some(([r, c]) => r === toRow && c === toCol);
+}
+
+function canAttackCard(attackerCard, attackerHex, targetCard, targetHex) {
+    // Check if the attacker can attack the target
+    if (!attackerCard || !attackerHex || !targetCard || !targetHex) return false;
+    
+    const { row: fromRow, col: fromCol } = attackerHex;
+    const { row: toRow, col: toCol } = targetHex;
+    
+    // Cannot attack own cards
+    if (attackerCard.owner === targetCard.owner) return false;
+    
+    // Check if target hex is valid and occupied by enemy
+    if (!isValidHex(toRow, toCol)) return false;
+    if (!gameState.board[toRow][toCol]) return false; // Target hex is empty
+    
+    // Check if card can attack this target according to game rules
+    const validAttacks = getValidAttacks(attackerCard, fromRow, fromCol);
+    return validAttacks.some(([r, c]) => r === toRow && c === toCol);
+}
+
+function canSummonAtPosition(card, row, col) {
+    // Check if a card can be summoned at the given position during play phase
+    if (!isValidHex(row, col)) return false;
+    
+    // Find leader position
+    const leaderPos = findLeaderPosition(gameState.currentPlayer);
+    if (!leaderPos) return false; // No leader on board
+    
+    // Check if the placement position is adjacent to the leader
+    const [leaderRow, leaderCol] = leaderPos;
+    const neighbors = getHexNeighbors(leaderRow, leaderCol);
+    const isAdjacentToLeader = neighbors.some(([r, c]) => r === row && c === col);
+    
+    if (!isAdjacentToLeader) return false;
+    
+    // Check if leader has already been used this turn (one action limit)
+    if (gameState.leaderAttackedThisTurn) return false;
+    
+    // Check if target position is empty or contains own card (replacement allowed)
+    const existingCard = gameState.board[row][col];
+    if (existingCard && existingCard.owner !== gameState.currentPlayer) {
+        return false; // Cannot summon on enemy card
+    }
+    
+    return true;
+}
+
+function isValidSetupPosition(row, col, player) {
+    // During setup phase, players can place cards anywhere on valid hexes
+    // The main restrictions are based on setup limits, not position
+    if (!isValidHex(row, col)) return false;
+    
+    // Can place on empty hex or replace own card
+    const existingCard = gameState.board[row][col];
+    if (existingCard && existingCard.owner !== player) {
+        return false; // Cannot place on enemy card during setup
+    }
+    
+    return true;
+}
+
+function canSummonCard(card, row, col) {
+    // Check if the card can be summoned at this location
+    // This should match the existing summon validation logic
+    
+    if (!isValidHex(row, col)) return false;
+    
+    if (gameState.phase === 'setup') {
+        // Setup phase summon rules
+        return isValidSetupPosition(row, col, gameState.currentPlayer);
+    } else {
+        // Play phase summon rules
+        return canSummonAtPosition(card, row, col);
+    }
+}
+
+function handleBoardCardDrop(e, targetHex, dragData) {
+    const [, cardId, sourceRow, sourceCol] = dragData.split(':');
+    const card = draggedCard; // Should be set from dragstart
+    
+    console.log(`Dropping board card ${card.value}${card.suit} at (${targetHex.row},${targetHex.col})`);
+    
+    // Check if we're attacking an enemy card
+    const targetCard = gameState.board[targetHex.row][targetHex.col];
+    if (targetCard && targetCard.owner !== card.owner) {
+        // Perform attack if it's a valid target
+        if (gameState.validAttacks && gameState.validAttacks.some(([r, c]) => r === targetHex.row && c === targetHex.col)) {
+            performAttack(targetHex.row, targetHex.col);
+            return;
+        }
+    }
+    
+    // Check if we're moving to a valid move position
+    if (gameState.validMoves && gameState.validMoves.some(([r, c]) => r === targetHex.row && c === targetHex.col)) {
+        moveCard(parseInt(sourceRow), parseInt(sourceCol), targetHex.row, targetHex.col, card);
+        return;
+    }
+    
+    console.log('Invalid drop target for board card');
+}
+
+// Throttled drag update for better performance
+function requestDragUpdate() {
+    if (!dragUpdateRequested) {
+        dragUpdateRequested = true;
+        requestAnimationFrame(() => {
+            updateCanvas();
+            dragUpdateRequested = false;
+        });
+    }
+}
+
+// Start dragging a card from hand
+function startHandCardDrag(card, x, y) {
+    dragState.isDragging = true;
+    dragState.dragType = 'hand-summon';
+    dragState.draggedCard = card;
+    dragState.startX = x;
+    dragState.startY = y;
+    
+    // Legacy compatibility
+    isDraggingCard = true;
+    draggedCard = card;
+    
+    console.log(`Started hand drag with ${card.value}${card.suit}`);
+}
+
+// Handle hand summon drag end
+function handleHandSummonDragEnd(targetHex) {
+    const card = dragState.draggedCard;
+    
+    // Check if it's a valid summoning position
+    if (gameState.validMoves && gameState.validMoves.some(([r, c]) => r === targetHex.row && c === targetHex.col)) {
+        placeCard(card, targetHex.row, targetHex.col);
+    } else {
+        console.log('Invalid summoning position');
     }
 }
 
@@ -5146,18 +6944,13 @@ function updateCursor(row, col) {
 }
 
 function handleCanvasClick(event) {
+    // Don't handle clicks if we just finished a drag
+    if (dragState.isDragging) return;
+    
     const coords = getCanvasCoordinates(event);
     const hex = pixelToHex(coords.x, coords.y);
     if (hex) {
         handleHexClick(hex.row, hex.col, event.ctrlKey);
-    }
-}
-
-function handleCanvasDoubleClick(event) {
-    const coords = getCanvasCoordinates(event);
-    const hex = pixelToHex(coords.x, coords.y);
-    if (hex) {
-        handleHexDoubleClick(hex.row, hex.col);
     }
 }
 
@@ -5198,11 +6991,23 @@ function createCardElement(card, showFaceDown = false) {
         }
     }
     
-    if (card.rotated) cardEl.classList.add('rotated');
+    if (isCardExhausted(card)) cardEl.classList.add('rotated');
     
-    // Add drag listeners
-    cardEl.addEventListener('dragstart', (e) => handleCardDragStart(e, card));
-    cardEl.addEventListener('dragend', handleCardDragEnd);
+    // Add drag listeners based on device capabilities
+    if (isTouchDevice) {
+        // Mobile touch-based drag
+        cardEl.addEventListener('touchstart', (e) => handleHandCardTouchStart(e, card), { passive: false });
+        cardEl.addEventListener('touchmove', handleHandCardTouchMove, { passive: false });
+        cardEl.addEventListener('touchend', handleHandCardTouchEnd, { passive: false });
+    } else {
+        // Desktop mouse-based drag (same logic as mobile)
+        cardEl.addEventListener('mousedown', (e) => handleHandCardMouseStart(e, card));
+        cardEl.addEventListener('mousemove', handleHandCardMouseMove);
+        cardEl.addEventListener('mouseup', handleHandCardMouseEnd);
+        // Prevent default drag behavior
+        cardEl.draggable = false;
+    }
+    
     cardEl.addEventListener('click', () => handleCardClick(card));
     
     // Add card info tooltip
@@ -5241,16 +7046,6 @@ function handleHexClick(row, col, ctrlKey = false) {
     }
 }
 
-function handleHexDoubleClick(row, col) {
-    // Double-click to return a card from map to hand
-    const card = gameState.board[row][col];
-    if (card && card.owner === gameState.currentPlayer) {
-        if (returnCardToHand(card)) {
-            console.log('Card returned to hand:', card.value, card.suit);
-        }
-    }
-}
-
 function handleSetupClick(row, col) {
     if (gameState.setupStep === 'place-cards') {
         if (gameState.selectedCard) {
@@ -5281,6 +7076,12 @@ function handleSetupClick(row, col) {
             if (gameState.board[row][col] && gameState.board[row][col].owner === gameState.currentPlayer) {
                 const replacedCard = gameState.board[row][col];
                 gameState.players[gameState.currentPlayer].hand.push(replacedCard);
+            }
+            
+            // Cards placed in setup are face down (except jokers/leaders)
+            if (card.suit !== 'joker') {
+                card.faceDown = true;
+                console.log(`Setup card ${card.value}${card.suit} placed face down`);
             }
             
             gameState.board[row][col] = card;
@@ -5568,71 +7369,91 @@ function calculateCombinedAttacks() {
         return;
     }
     
-    // Find targets that ALL selected cards can attack
+    // Find targets that ALL selected cards can attack (intersection)
     let commonTargets = null;
+    let commonAbsorptions = null;
     
     for (const selected of gameState.selectedCards) {
         const cardAttacks = getValidAttacks(selected.card, selected.position[0], selected.position[1]);
+        const cardAbsorptions = getAbsorptions(selected.card, selected.position[0], selected.position[1]);
         
         if (commonTargets === null) {
+            // First card - use its targets as the starting set
             commonTargets = cardAttacks;
+            commonAbsorptions = cardAbsorptions;
         } else {
             // Keep only targets that this card can also attack
             commonTargets = commonTargets.filter(([r1, c1]) => 
                 cardAttacks.some(([r2, c2]) => r1 === r2 && c1 === c2)
             );
+            
+            // Keep only absorptions that this card can also provide
+            commonAbsorptions = commonAbsorptions.filter(abs1 => 
+                cardAbsorptions.some(abs2 => 
+                    abs1.target[0] === abs2.target[0] && abs1.target[1] === abs2.target[1]
+                )
+            );
         }
     }
     
     gameState.validAttacks = commonTargets || [];
+    gameState.absorptions = commonAbsorptions || [];
     
-    // Calculate absorptions for the first card (simplified)
-    if (gameState.selectedCards.length > 0) {
-        const firstCard = gameState.selectedCards[0];
-        gameState.absorptions = getAbsorptions(firstCard.card, firstCard.position[0], firstCard.position[1]);
-    } else {
-        gameState.absorptions = [];
-    }
+    console.log('Combined attacks calculated for', gameState.selectedCards.length, 'cards:', gameState.validAttacks.length, 'common targets');
 }
 
 function handleMobileCardSelection(clickedCard, row, col, ctrlKey = false) {
-    // Check if this card is already selected (single selection)
-    const isSameCardSelected = gameState.selectedCard && gameState.selectedCard.id === clickedCard.id;
+    console.log('handleMobileCardSelection called:', clickedCard.value + clickedCard.suit, 'at', row, col);
     
-    // Check if this card is in multi-selection
-    const isInMultiSelection = gameState.selectedCards.some(selected => selected.card.id === clickedCard.id);
-    
-    if (ctrlKey) {
-        // Desktop behavior: Ctrl+click for multi-selection
-        handleMultiSelection(clickedCard, row, col);
-    } else if (isSameCardSelected && !isMobileMultiSelectMode) {
-        // Mobile: Second tap on same card - enter multi-select mode (unless it's a leader)
-        if (clickedCard.suit === 'joker') {
-            // Leaders cannot enter multi-select mode, just keep single selection
-            return;
-        }
-        isMobileMultiSelectMode = true;
-        // Transfer single selection to multi-selection
-        if (!gameState.selectedCards.some(selected => selected.card.id === clickedCard.id)) {
-            gameState.selectedCards.push({
-                card: clickedCard,
-                position: [row, col]
-            });
-        }
-        // Clear single selection and calculate combined attacks
-        gameState.selectedCard = null;
-        gameState.selectedHex = null;
-        gameState.validMoves = [];
-        calculateCombinedAttacks();
-    } else if (isMobileMultiSelectMode) {
-        // In multi-select mode - toggle card in selection
-        handleMultiSelection(clickedCard, row, col);
-    } else {
-        // Regular first tap - single select (clear others first)
+    // Leaders use single selection only
+    if (clickedCard.suit === 'joker') {
+        console.log('Leader clicked - single selection only');
         exitMobileMultiSelectMode();
         clearSelection();
         selectCard(clickedCard, row, col);
+        return;
     }
+    
+    // Regular cards always use multi-selection
+    console.log('Regular card clicked - adding to multi-selection');
+    
+    // Ensure we're in multi-select mode
+    isMobileMultiSelectMode = true;
+    
+    // Clear any single selection if it exists
+    if (gameState.selectedCard) {
+        gameState.selectedCard = null;
+        gameState.selectedHex = null;
+        gameState.validMoves = [];
+    }
+    
+    // Check if this card is already in multi-selection
+    const cardIndex = gameState.selectedCards.findIndex(selected => selected.card.id === clickedCard.id);
+    
+    if (cardIndex >= 0) {
+        // Card is already selected - remove it (toggle off)
+        console.log('Removing card from multi-selection:', clickedCard.value + clickedCard.suit);
+        gameState.selectedCards.splice(cardIndex, 1);
+    } else {
+        // Card is not selected - add it (toggle on)
+        console.log('Adding card to multi-selection:', clickedCard.value + clickedCard.suit);
+        gameState.selectedCards.push({
+            card: clickedCard,
+            position: [row, col]
+        });
+    }
+    
+    // If no cards left in multi-selection, exit multi-select mode
+    if (gameState.selectedCards.length === 0) {
+        console.log('No cards left - exiting multi-select mode');
+        exitMobileMultiSelectMode();
+        clearSelection();
+        return;
+    }
+    
+    // Calculate combined attacks for selected cards
+    calculateCombinedAttacks();
+    console.log('Multi-selection updated, total cards:', gameState.selectedCards.length);
 }
 
 function exitMobileMultiSelectMode() {
@@ -5734,6 +7555,11 @@ function calculateAttackResults(targetRow, targetCol) {
     const target = gameState.board[targetRow][targetCol];
     if (!target) return null;
     
+    // Don't show attack results when target is face down
+    if (target.faceDown && target.owner !== gameState.currentPlayer) {
+        return null;
+    }
+    
     let attackers = [];
     let totalAttack = 0;
     
@@ -5811,6 +7637,24 @@ function performCombinedAttack(targetRow, targetCol) {
     const target = gameState.board[targetRow][targetCol];
     if (!target) return;
     
+    // Show attack animation for all attacking cards
+    startAttackAnimation(gameState.selectedCards, [targetRow, targetCol]);
+    
+    // Automatically face up all cards involved in attack
+    // Face up all attacking cards
+    for (const selected of gameState.selectedCards) {
+        if (selected.card.faceDown) {
+            selected.card.faceDown = false;
+            console.log(`Attacker ${selected.card.value}${selected.card.suit} automatically faced up for combined attack`);
+        }
+    }
+    
+    // Face up the defender
+    if (target.faceDown) {
+        target.faceDown = false;
+        console.log(`Defender ${target.value}${target.suit} automatically faced up for defense`);
+    }
+    
     // Calculate combined attack power
     let totalAttack = 0;
     for (const selected of gameState.selectedCards) {
@@ -5824,6 +7668,12 @@ function performCombinedAttack(targetRow, targetCol) {
         targetRow, targetCol, target.owner
     );
     const actualDefender = absorber || target;
+    
+    // Face up spade absorber if it's different from the original target
+    if (absorber && absorber !== target && absorber.faceDown) {
+        absorber.faceDown = false;
+        console.log(`Spade absorber ${absorber.value}${absorber.suit} automatically faced up for defense`);
+    }
     
     console.log(`Combined attack: ${totalAttack} vs ${actualDefender.defense}`);
     
@@ -5840,6 +7690,9 @@ function performCombinedAttack(targetRow, targetCol) {
         }
         gameState.leaderAttackedThisTurn = true;
         
+        // Show leader attack animation
+        startLeaderAttackAnimation(actualDefender, [targetRow, targetCol]);
+        
         // Leader stays on the board and doesn't counter-attack (0 attack)
         // RULE: All attackers are discarded after attacking the enemy leader
         for (const selected of gameState.selectedCards) {
@@ -5851,7 +7704,7 @@ function performCombinedAttack(targetRow, targetCol) {
             } else {
                 // Regular card in combined attack - discard it
                 gameState.players[gameState.currentPlayer].discarded.push(selected.card);
-                gameState.board[selected.position[0]][selected.position[1]] = null;
+                startFadeOutAnimation(selected.card, selected.position, 'discarded');
                 console.log(`Card ${selected.card.suit} ${selected.card.value} discarded after combined attack on enemy leader`);
             }
         }
@@ -5883,14 +7736,14 @@ function performCombinedAttack(targetRow, targetCol) {
                     console.error('CRITICAL ERROR: Attempted to remove absorbing leader! This should never happen!');
                     return;
                 }
-                gameState.board[absorberPos[0]][absorberPos[1]] = null;
+                startFadeOutAnimation(actualDefender, absorberPos, 'captured');
             } else {
                 // No absorption - remove the original target (SAFETY: Never remove leaders!)
                 if (target.suit === 'joker') {
                     console.error('CRITICAL ERROR: Attempted to remove leader from board in combined attack! This should never happen!');
                     return;
                 }
-                gameState.board[targetRow][targetCol] = null;
+                startFadeOutAnimation(target, [targetRow, targetCol], 'captured');
             }
         } else {
             // Defender survives - mark as exhausted (unless it's a leader)
@@ -5913,7 +7766,7 @@ function performCombinedAttack(targetRow, targetCol) {
                 } else {
                     // Attacker is destroyed by counter-attack - goes to attacker's discarded stack
                     gameState.players[gameState.currentPlayer].discarded.push(attacker);
-                    gameState.board[selected.position[0]][selected.position[1]] = null;
+                    startFadeOutAnimation(attacker, selected.position, 'discarded');
                 }
             } else {
                 // Attacker survives - mark as exhausted
@@ -5932,6 +7785,9 @@ function performCombinedAttack(targetRow, targetCol) {
     if (actualDefender && actualDefender.suit !== 'joker') {
         gameState.cardsAttackExhaustion.set(actualDefender.id, exhaustionEndTurn);
     }
+    
+    // Update drag overlays after combined attack (cards may have been destroyed)
+    updateBoardCardOverlays();
     
     // SAFETY: Validate leaders are still on map after combined attack
     if (gameState.phase === 'play') {
@@ -5956,18 +7812,38 @@ function isCardExhausted(card) {
 
 // Game logic
 function selectCard(card, row, col) {
-    if (card.owner !== gameState.currentPlayer || isCardExhausted(card)) return;
+    console.log('selectCard called for:', card.value + card.suit, 'owner:', card.owner, 'currentPlayer:', gameState.currentPlayer, 'exhausted:', isCardExhausted(card));
+    if (card.owner !== gameState.currentPlayer || isCardExhausted(card)) {
+        console.log('Selection blocked - wrong owner or exhausted');
+        return;
+    }
     
     // Card is already checked for exhaustion above
+    console.log('Setting selectedCard to:', card.value + card.suit);
     
+    // Clear previous highlights first
+    gameState.validMoves = [];
+    gameState.validAttacks = [];
+    gameState.blockedMoves = [];
+    gameState.absorptions = [];
+    hoveredHex = null;
+    hoveredAttackTarget = null;
+    attackPreviewResults = null;
+    
+    // Set selection state
     gameState.selectedCard = card;
     gameState.selectedHex = [row, col];
     
-    // Calculate valid moves and attacks
+    // Calculate all targets (same as drag logic but without drag state management)
     gameState.validMoves = getValidMoves(card, row, col);
     gameState.validAttacks = getValidAttacks(card, row, col);
     gameState.blockedMoves = getBlockedMoves(card, row, col);
     gameState.absorptions = getAbsorptions(card, row, col);
+    
+    console.log('selectCard calculated - validAttacks:', gameState.validAttacks.length, 'targets');
+    
+    // Update canvas to show highlights
+    updateCanvas();
     
     // Update cursor after selecting card
     if (hoveredHex) {
@@ -5999,6 +7875,20 @@ function clearSelection() {
     }
 }
 
+
+
+// Helper function to get suit symbol
+function getSuitSymbol(suit) {
+    switch(suit) {
+        case 'hearts': return '♥';
+        case 'diamonds': return '♦';
+        case 'clubs': return '♣';
+        case 'spades': return '♠';
+        case 'joker': return '★';
+        default: return '';
+    }
+}
+
 function getValidMoves(card, row, col) {
     const moves = [];
     
@@ -6009,6 +7899,31 @@ function getValidMoves(card, row, col) {
     
     // If card has already moved this turn, no valid moves
     if (gameState.cardsMovedThisTurn.has(card.id)) {
+        return moves;
+    }
+    
+    // Face down cards can move normally when selected (treated as face up for movement calculation)
+    // But face down cards that aren't selected still have limited movement (EXCEPTION: AI can move its own face-down cards normally)
+    const isSelected = gameState.selectedCard === card || 
+                      (gameState.selectedCards && gameState.selectedCards.some(selected => selected.card === card));
+    const isAIControlled = aiEnabled[card.owner];
+    const effectiveFaceDown = card.faceDown && !isSelected && !isAIControlled;
+    
+    // Debug: Log when AI is calculating moves for face-down cards
+    if (card.faceDown && isAIControlled && !isSelected) {
+        console.log(`[AI DEBUG] Calculating moves for AI face-down card ${card.value}${card.suit} at [${row},${col}]`);
+    }
+    
+    // Face down unselected cards can only move 1 grid (to adjacent hexes) - unless AI controlled
+    if (effectiveFaceDown) {
+        const neighbors = getHexNeighbors(row, col);
+        for (const [nr, nc] of neighbors) {
+            const targetCard = gameState.board[nr][nc];
+            // Can only move to empty hexes
+            if (!targetCard) {
+                moves.push([nr, nc]);
+            }
+        }
         return moves;
     }
     
@@ -6117,6 +8032,22 @@ function getValidAttacks(card, row, col) {
         return attacks;
     }
     
+    // Face down cards can attack normally when selected (treated as face up for attack calculation)
+    const isSelected = gameState.selectedCard === card || 
+                      (gameState.selectedCards && gameState.selectedCards.some(selected => selected.card === card));
+    const isAIControlled = aiEnabled[card.owner];
+    const effectiveFaceDown = card.faceDown && !isSelected && !isAIControlled;
+    
+    // Face down unselected cards cannot attack (EXCEPTION: AI can attack with its own face-down cards)
+    if (effectiveFaceDown) {
+        return attacks;
+    }
+    
+    // Debug: Log when AI is calculating attacks for face-down cards
+    if (card.faceDown && isAIControlled && !isSelected) {
+        console.log(`[AI DEBUG] Calculating attacks for AI face-down card ${card.value}${card.suit} at [${row},${col}]`);
+    }
+    
     // Leaders cannot attack
     if (card.suit === 'joker') {
         return attacks;
@@ -6196,16 +8127,20 @@ function getAbsorptions(card, row, col) {
 }
 
 function isBlockedByClubs(card, fromRow, fromCol, toRow, toCol) {
-    // Check if any enemy clubs block this movement
+    // Check if any enemy clubs or spades block this movement
     // Clubs only block movement INTO the blocked area, not OUT of it
     for (let r = 0; r < 11; r++) {
         for (let c = 0; c < 11; c++) {
-            const clubCard = gameState.board[r][c];
-            if (clubCard && clubCard.suit === 'clubs' && clubCard.owner !== card.owner && !clubCard.rotated) {
-                const clubNeighbors = getHexNeighbors(r, c);
-                // Only block if the destination (toRow, toCol) is adjacent to the club
-                if (clubNeighbors.some(([nr, nc]) => nr === toRow && nc === toCol)) {
-                    return true;
+            const blockingCard = gameState.board[r][c];
+            // Face down cards and exhausted cards cannot block movement
+            if (blockingCard && blockingCard.owner !== card.owner && !isCardExhausted(blockingCard) && !blockingCard.faceDown) {
+                // Only clubs block movement, spades absorb attacks but don't block movement
+                if (blockingCard.suit === 'clubs') {
+                    const neighbors = getHexNeighbors(r, c);
+                    // Only block if the destination (toRow, toCol) is adjacent to the blocking card
+                    if (neighbors.some(([nr, nc]) => nr === toRow && nc === toCol)) {
+                        return true;
+                    }
                 }
             }
         }
@@ -6252,8 +8187,34 @@ function moveCard(fromRow, fromCol, toRow, toCol) {
     gameState.board[fromRow][fromCol] = null;
     gameState.board[toRow][toCol] = card;
     
+    // Check if face down diamond moved 2 steps - automatically face it up
+    if (card.faceDown && card.suit === 'diamonds') {
+        const distance = getDistance(fromRow, fromCol, toRow, toCol);
+        if (distance === 2) {
+            card.faceDown = false;
+            console.log(`Face down diamond ${card.value}♦ automatically faced up after moving 2 steps`);
+        }
+    }
+    
     // Mark card as moved
     gameState.cardsMovedThisTurn.add(card.id);
+    
+    // Update drag overlays to reflect new card positions
+    updateBoardCardOverlays();
+    
+    // Auto-select the moved card to show remaining actions (only for human players)
+    if (card.owner === gameState.currentPlayer && !aiEnabled[gameState.currentPlayer] && gameState.phase === 'play') {
+        setTimeout(() => {
+            // Only auto-select if the card has remaining actions
+            const hasAttacks = !gameState.cardsAttackedThisTurn.has(card.id) && getValidAttacks(card, toRow, toCol).length > 0;
+            if (hasAttacks) {
+                selectCard(card, toRow, toCol);
+                console.log(`Auto-selected ${card.value}${card.suit} after movement (has ${getValidAttacks(card, toRow, toCol).length} attacks available)`);
+            } else {
+                console.log(`Skipped auto-selection of ${card.value}${card.suit} - no remaining actions`);
+            }
+        }, 100); // Small delay to ensure UI updates properly
+    }
 }
 
 function attack(fromRow, fromCol, toRow, toCol) {
@@ -6261,6 +8222,9 @@ function attack(fromRow, fromCol, toRow, toCol) {
     const defender = gameState.board[toRow][toCol];
     
     if (!defender) return;
+    
+    // Show attack animation for the attacking card
+    startAttackAnimation([attacker], [toRow, toCol]);
     
     // SAFETY: Check if attacker is exhausted
     if (isCardExhausted(attacker)) {
@@ -6275,9 +8239,25 @@ function attack(fromRow, fromCol, toRow, toCol) {
         return;
     }
     
+    // Automatically face up cards involved in attack
+    if (attacker.faceDown) {
+        attacker.faceDown = false;
+        console.log(`Attacker ${attacker.value}${attacker.suit} automatically faced up for attack`);
+    }
+    if (defender.faceDown) {
+        defender.faceDown = false;
+        console.log(`Defender ${defender.value}${defender.suit} automatically faced up for attack`);
+    }
+    
     // Check for spade absorption
     const absorber = findSpadeAbsorber(fromRow, fromCol, toRow, toCol, defender.owner);
     const actualDefender = absorber || defender;
+    
+    // If there's an absorber, face it up too
+    if (absorber && absorber.faceDown) {
+        absorber.faceDown = false;
+        console.log(`Absorber ${absorber.value}${absorber.suit} automatically faced up for absorption`);
+    }
     
     // Calculate damage
     let totalAttack = attacker.attack;
@@ -6301,6 +8281,9 @@ function attack(fromRow, fromCol, toRow, toCol) {
         
         gameState.leaderAttackedThisTurn = true;
         
+        // Show leader attack animation
+        startLeaderAttackAnimation(actualDefender, [toRow, toCol]);
+        
         // Leader stays on the board and doesn't counter-attack (0 attack)
         // RULE: Attacker is discarded after attacking the enemy leader
         if (attacker.suit === 'joker') {
@@ -6311,7 +8294,7 @@ function attack(fromRow, fromCol, toRow, toCol) {
         } else {
             // Regular card attacking leader - discard the attacker
             gameState.players[attacker.owner].discarded.push(attacker);
-            gameState.board[fromRow][fromCol] = null;
+            startFadeOutAnimation(attacker, [fromRow, fromCol], 'discarded');
             console.log(`Card ${attacker.suit} ${attacker.value} discarded after attacking enemy leader`);
         }
     } else {
@@ -6344,14 +8327,14 @@ function attack(fromRow, fromCol, toRow, toCol) {
                     console.error('CRITICAL ERROR: Attempted to remove absorbing leader! This should never happen!');
                     return;
                 }
-                gameState.board[absorberPos[0]][absorberPos[1]] = null;
+                startFadeOutAnimation(actualDefender, absorberPos, 'captured');
             } else {
                 // No absorption - remove the original target (SAFETY: Never remove leaders!)
                 if (defender.suit === 'joker') {
                     console.error('CRITICAL ERROR: Attempted to remove leader from board in single attack! This should never happen!');
                     return;
                 }
-                gameState.board[toRow][toCol] = null;
+                startFadeOutAnimation(defender, [toRow, toCol], 'captured');
             }
         } else {
             // Defender survives - mark as exhausted (unless it's a leader)
@@ -6371,7 +8354,7 @@ function attack(fromRow, fromCol, toRow, toCol) {
             } else {
                 // Attacker is destroyed by counter-attack - goes to attacker's discarded stack
                 gameState.players[attacker.owner].discarded.push(attacker);
-                gameState.board[fromRow][fromCol] = null;
+                startFadeOutAnimation(attacker, [fromRow, fromCol], 'discarded');
             }
         } else {
             // Attacker survives - mark as exhausted
@@ -6392,6 +8375,9 @@ function attack(fromRow, fromCol, toRow, toCol) {
     if (actualDefender && actualDefender.suit !== 'joker') {
         gameState.cardsAttackExhaustion.set(actualDefender.id, exhaustionEndTurn);
     }
+    
+    // Update drag overlays after attack (cards may have been destroyed)
+    updateBoardCardOverlays();
     
     // SAFETY: Validate leaders are still on map after single attack
     if (gameState.phase === 'play') {
@@ -6417,12 +8403,9 @@ function findSpadeAbsorber(attackerRow, attackerCol, targetRow, targetCol, defen
     const attackerNeighbors = getHexNeighbors(attackerRow, attackerCol);
     for (const [nr, nc] of attackerNeighbors) {
         const card = gameState.board[nr][nc];
-        if (card && card.suit === 'spades' && card.owner === defenderOwner && !card.rotated) {
-            // Exhausted spades cannot absorb attacks
-            const hasBeenUsed = gameState.cardsMovedThisTurn.has(card.id) || gameState.cardsAttackedThisTurn.has(card.id);
-            if (!hasBeenUsed) {
-                return card;
-            }
+        // Face down spades and exhausted spades cannot absorb attacks
+        if (card && card.suit === 'spades' && card.owner === defenderOwner && !isCardExhausted(card) && !card.faceDown) {
+            return card;
         }
     }
     
@@ -6441,12 +8424,9 @@ function findSpadeAbsorber(attackerRow, attackerCol, targetRow, targetCol, defen
             const pathNeighbors = getHexNeighbors(checkRow, checkCol);
             for (const [nr, nc] of pathNeighbors) {
                 const card = gameState.board[nr][nc];
-                if (card && card.suit === 'spades' && card.owner === defenderOwner && !card.rotated) {
-                    // Exhausted spades cannot absorb attacks
-                    const hasBeenUsed = gameState.cardsMovedThisTurn.has(card.id) || gameState.cardsAttackedThisTurn.has(card.id);
-                    if (!hasBeenUsed) {
-                        return card;
-                    }
+                // Face down spades and exhausted spades cannot absorb attacks
+                if (card && card.suit === 'spades' && card.owner === defenderOwner && !isCardExhausted(card) && !card.faceDown) {
+                    return card;
                 }
             }
         }
@@ -6576,6 +8556,9 @@ function startNewTurn() {
     
     updateUI();
     
+    // Update drag overlays for the new current player
+    updateBoardCardOverlays();
+    
     // Trigger AI move if current player is AI controlled
     if (aiEnabled[gameState.currentPlayer] && gameState.phase === 'play') {
         console.log(`startNewTurn: Triggering AI for player ${gameState.currentPlayer}`);
@@ -6684,6 +8667,9 @@ function endTurn() {
         updateCanvas();
         updateUI();
         
+        // Update draggable overlays after player switch
+        updateBoardCardOverlays();
+        
         // Trigger AI move if current player is AI controlled in setup
         if (aiEnabled[gameState.currentPlayer]) {
             setTimeout(() => {
@@ -6739,6 +8725,16 @@ function checkAggressorRule() {
 // switchPlayer function removed - now handled by endTurn() for both modes
 
 
+// Animation cleanup function
+function clearAllFadeAnimations() {
+    fadeOutElements.forEach(element => {
+        if (element.parentNode) {
+            element.parentNode.removeChild(element);
+        }
+    });
+    fadeOutElements = [];
+}
+
 // UI updates
 function updateCanvas() {
     // Clear canvas using logical dimensions
@@ -6763,22 +8759,34 @@ function updateCanvas() {
             let strokeColor = '#666';   // Gray borders
             let strokeWidth = 1;
             
-            // Only highlight valid moves on grid (selection highlighting moved to cards)
-            if (gameState.validMoves.some(([r, c]) => r === row && c === col)) {
-                // Use current player's color for move indicators
-                const playerColor = gameState.currentPlayer === 1 ? '#4a90e2' : '#ffd700';
-                fillColor = `${playerColor}40`; // Add transparency (25% opacity)
-                strokeColor = `${playerColor}99`; // Add transparency (60% opacity)
-                strokeWidth = 1;
-            }
+            // Check hex highlighting states
+            const isValidMove = gameState.validMoves.some(([r, c]) => r === row && c === col);
+            const isBlockedMove = gameState.blockedMoves.some(([r, c]) => r === row && c === col);
+            const isAttackTarget = gameState.validAttacks.some(([r, c]) => r === row && c === col);
             
             // Check if this hex is an absorbing spade (when hovering over its protected target)
             const isAbsorbingSpade = hoveredHex && gameState.absorptions.some(abs => 
                 abs.target[0] === hoveredHex[0] && abs.target[1] === hoveredHex[1] && 
                 abs.absorber && abs.absorber[0] === row && abs.absorber[1] === col);
             
-            // Check if this hex is a valid attack target
-            const isAttackTarget = gameState.validAttacks.some(([r, c]) => r === row && c === col);
+            // Highlight valid moves (only if hex is empty - if there's a card, it will be highlighted instead)
+            if (isValidMove && !gameState.board[row][col]) {
+                // Use current player's color for move indicators
+                const playerColor = gameState.currentPlayer === 1 ? '#87ceeb' : '#ffd700';
+                fillColor = `${playerColor}40`; // Add transparency (25% opacity)
+                strokeColor = `${playerColor}99`; // Add transparency (60% opacity)
+                strokeWidth = 1;
+            }
+            
+            // Highlight blocked moves (red tint)
+            if (isBlockedMove) {
+                fillColor = '#ff000030'; // Red with transparency
+                strokeColor = '#ff000060'; // Red stroke with transparency
+                strokeWidth = 1;
+            }
+            
+            // Don't highlight attack target hexes - only highlight the cards themselves
+            // (Attack target highlighting is handled in the card drawing section)
             
             
             // Draw hexagon
@@ -6787,9 +8795,27 @@ function updateCanvas() {
             // Draw card if present
             const card = gameState.board[row][col];
             if (card) {
-                // Check if this card is selected
-                const isSelected = gameState.selectedHex && gameState.selectedHex[0] === row && gameState.selectedHex[1] === col;
-                const isMultiSelected = gameState.selectedCards && gameState.selectedCards.some(selected => selected.position[0] === row && selected.position[1] === col);
+                // Skip drawing card if it's currently being dragged
+                if (dragState.isDragging && dragState.draggedCard && dragState.draggedCard.id === card.id) {
+                    // Draw a ghost outline at the original position
+                    ctx.save();
+                    ctx.globalAlpha = 0.3;
+                    drawHexagon(pos.x, pos.y, 'rgba(200, 200, 200, 0.1)', '#999', 1);
+                    ctx.restore();
+                    
+                    // Draw skull symbol on dragging card's original position if it would be destroyed in attack
+                    if (attackPreviewResults && hoveredAttackTarget) {
+                        const draggingCardWillBeDestroyed = 
+                            attackPreviewResults.attackersCasualites.some(casualty => casualty.id === dragState.draggedCard.id);
+                        
+                        if (draggingCardWillBeDestroyed) {
+                            drawSkullSymbol(pos.x, pos.y);
+                        }
+                    }
+                } else {
+                    // Check if this card is selected
+                    const isSelected = gameState.selectedHex && gameState.selectedHex[0] === row && gameState.selectedHex[1] === col;
+                    const isMultiSelected = gameState.selectedCards && gameState.selectedCards.some(selected => selected.position[0] === row && selected.position[1] === col);
                 
                 // Check if this attack target is being absorbed by a spade
                 const isAbsorbed = isAttackTarget && gameState.absorptions.some(abs => 
@@ -6803,7 +8829,13 @@ function updateCanvas() {
                 // Highlight attack targets, but not if we're hovering over an absorbed target
                 const shouldHighlightAsTarget = isAttackTarget && !isHoveredAndAbsorbed;
                 
-                drawCard(card, pos.x, pos.y, shouldHighlightAsTarget, isSelected, isMultiSelected, isAbsorbingSpade);
+                // Create a temporary card object for rendering - show face down cards as face up when selected
+                const displayCard = { ...card };
+                if (card.faceDown && isSelected) {
+                    displayCard.faceDown = false;
+                }
+                
+                drawCard(displayCard, pos.x, pos.y, shouldHighlightAsTarget, isSelected, isMultiSelected, isAbsorbingSpade);
                 
                 // Draw shield symbol only when hovering over protected targets
                 // Don't show shield on the absorbing spade itself
@@ -6862,6 +8894,7 @@ function updateCanvas() {
                 if (isDiscardable) {
                     drawDiscardSymbol(pos.x, pos.y);
                 }
+                } // Close the else block for non-dragged cards
             }
             
             // Draw blocked symbol for blocked moves when a card is selected
@@ -6876,92 +8909,179 @@ function updateCanvas() {
             }
         }
     }
+    
+    // Draw dragging card visual - show card following mouse/touch
+    if (dragState.isDragging && dragState.draggedCard) {
+        drawDraggingCard();
+    }
+}
+
+/**
+ * Convert a color to grayscale
+ * @param {string} color - Color in hex format (e.g., '#ff0000')
+ * @returns {string} Grayscale color in hex format
+ */
+function convertToGrayscale(color) {
+    // Handle common color formats
+    let r, g, b;
+    
+    if (color.startsWith('#')) {
+        // Hex color
+        const hex = color.slice(1);
+        if (hex.length === 3) {
+            r = parseInt(hex[0] + hex[0], 16);
+            g = parseInt(hex[1] + hex[1], 16);
+            b = parseInt(hex[2] + hex[2], 16);
+        } else if (hex.length === 6) {
+            r = parseInt(hex.slice(0, 2), 16);
+            g = parseInt(hex.slice(2, 4), 16);
+            b = parseInt(hex.slice(4, 6), 16);
+        } else {
+            return color; // Invalid format, return original
+        }
+    } else if (color.startsWith('rgb')) {
+        // RGB format
+        const matches = color.match(/rgb\((\d+),\s*(\d+),\s*(\d+)\)/);
+        if (matches) {
+            r = parseInt(matches[1]);
+            g = parseInt(matches[2]);
+            b = parseInt(matches[3]);
+        } else {
+            return color; // Invalid format, return original
+        }
+    } else {
+        // Named colors or other formats - return a neutral gray
+        return '#888888';
+    }
+    
+    // Calculate grayscale using luminance formula
+    const gray = Math.round(0.299 * r + 0.587 * g + 0.114 * b);
+    
+    // Convert back to hex
+    const grayHex = gray.toString(16).padStart(2, '0');
+    return `#${grayHex}${grayHex}${grayHex}`;
 }
 
 function drawCard(card, x, y, isAttackTarget = false, isSelected = false, isMultiSelected = false, isAbsorbingSpade = false) {
     // Set colors - player color for numbers, suit color for symbols
-    let playerColor = '#ffffff'; // Default white for face-down cards
+    let playerColor = '#ffffff'; // Default white for enemy face-down cards
     let suitColor = '#ffffff';
-    if (!card.faceDown) {
+    const isOwnCard = card.owner === gameState.currentPlayer;
+    const isHumanCard = !aiEnabled[card.owner]; // Check if card belongs to human player
+    const isBothAI = aiEnabled[1] && aiEnabled[2]; // Check if both players are AI
+    const isBothHuman = !aiEnabled[1] && !aiEnabled[2]; // Check if both players are human
+    const isExhausted = isCardExhausted(card); // Declare this early for use in color processing
+    
+    // Determine face-down visibility based on game mode
+    let showFaceDownCard = false;
+    if (isBothHuman) {
+        // Human vs Human: use old behavior (current player's cards)
+        showFaceDownCard = isOwnCard;
+    } else if (isBothAI) {
+        // AI vs AI: show all face-down cards for human observer
+        showFaceDownCard = true;
+    } else {
+        // Mixed Human vs AI: only show human player's face-down cards
+        showFaceDownCard = isHumanCard;
+    }
+    
+    if (!card.faceDown || (card.faceDown && showFaceDownCard)) {
+        // Show colors based on face-down visibility rules
         playerColor = getPlayerColor(card);
         suitColor = getSuitColor(card.suit, card);
+        
+        // Convert to grayscale if card is exhausted
+        if (isExhausted) {
+            playerColor = convertToGrayscale(playerColor);
+            suitColor = convertToGrayscale(suitColor);
+        }
     }
     
-    // Set opacity based on exhaustion status
     ctx.save();
-    if (isCardExhausted(card)) {
-        ctx.globalAlpha = 0.5; // Half opacity for exhausted cards
-    } else {
-        ctx.globalAlpha = 1.0; // Full opacity for available cards
-    }
+    ctx.globalAlpha = 1.0; // Keep full opacity, use grayscale for exhausted cards instead
     
     // Draw hexagon border around card with player's side color (smaller than grid hex)
-    if (!card.faceDown) {
-        let borderColor = getPlayerColor(card);
-        let lineWidth = 2;
-        let backgroundColor = null;
-        
-        // Selection highlighting takes priority
-        if (isSelected) {
-            borderColor = '#ffffff'; // White border for single selection
-            lineWidth = 3;
-        } else if (isMultiSelected) {
-            // Add subtle pulsing effect to multi-selected cards
-            const pulseIntensity = 0.3 + 0.2 * Math.sin(Date.now() * 0.003); // Gentle pulse between 0.3 and 0.5
-            borderColor = '#ffa500'; // Orange border for multi-selection (more distinct from yellow UI elements)
-            lineWidth = 3;
-            backgroundColor = `rgba(255, 165, 0, ${pulseIntensity})`; // Pulsing orange background for multi-selection
-        } else if (isAbsorbingSpade) {
-            backgroundColor = 'rgba(255, 128, 128, 0.5)'; // Light blue background for absorbing spades
-            // Keep original border color
-            lineWidth = 3; // Thicker border for emphasis
-        } else if (isAttackTarget) {
-            backgroundColor = 'rgba(255, 0, 0, 0.2)'; // More opaque red fill for attack targets
-            // Keep original border color (don't change borderColor)
-            lineWidth = 3; // Still use thicker border
-        }
-        
-        const cardHexSize = hexSize * 0.8; // Make card border 80% of grid hex size
-        
-        // Create smaller hexagon corners
-        const corners = [];
-        for (let i = 0; i < 6; i++) {
-            const angle = (Math.PI / 3) * i;
-            corners.push({
-                x: x + cardHexSize * Math.cos(angle),
-                y: y + cardHexSize * Math.sin(angle)
-            });
-        }
-        
-        ctx.beginPath();
-        ctx.moveTo(corners[0].x, corners[0].y);
-        for (let i = 1; i < 6; i++) {
-            ctx.lineTo(corners[i].x, corners[i].y);
-        }
-        ctx.closePath();
-        
-        // Fill background if needed
-        if (backgroundColor) {
-            ctx.fillStyle = backgroundColor;
-            ctx.fill();
-        }
-        
-        // Draw border
-        ctx.strokeStyle = borderColor;
-        ctx.lineWidth = lineWidth;
-        ctx.stroke();
+    let borderColor = card.faceDown ? getPlayerColor(card) : getPlayerColor(card);
+    let lineWidth = 2;
+    let backgroundColor = null;
+    
+    // Selection highlighting takes priority
+    if (isSelected) {
+        borderColor = '#ffffff'; // White border for single selection
+        lineWidth = 3;
+    } else if (isMultiSelected) {
+        // Add subtle pulsing effect to multi-selected cards
+        const pulseIntensity = 0.3 + 0.2 * Math.sin(Date.now() * 0.003); // Gentle pulse between 0.3 and 0.5
+        borderColor = '#ffa500'; // Orange border for multi-selection (more distinct from yellow UI elements)
+        lineWidth = 3;
+        backgroundColor = `rgba(255, 165, 0, ${pulseIntensity})`; // Pulsing orange background for multi-selection
+    } else if (isAbsorbingSpade && !card.faceDown) {
+        backgroundColor = 'rgba(255, 128, 128, 0.5)'; // Light blue background for absorbing spades
+        // Keep original border color
+        lineWidth = 3; // Thicker border for emphasis
+    } else if (isAttackTarget) {
+        backgroundColor = 'rgba(255, 0, 0, 0.2)'; // More opaque red fill for attack targets (both face up and face down)
+        // Keep original border color (don't change borderColor)
+        lineWidth = 3; // Still use thicker border
     }
     
-    // Draw text normally - only number and symbol with team colors - vertically centered
-    if (card.faceDown) {
-        ctx.fillStyle = '#ffffff';
-        ctx.font = `bold ${Math.round(18 * zoomLevel)}px Arial`;
+    const cardHexSize = hexSize * 0.8; // Make card border 80% of grid hex size
+    
+    // Create smaller hexagon corners
+    const corners = [];
+    for (let i = 0; i < 6; i++) {
+        const angle = (Math.PI / 3) * i;
+        corners.push({
+            x: x + cardHexSize * Math.cos(angle),
+            y: y + cardHexSize * Math.sin(angle)
+        });
+    }
+    
+    ctx.beginPath();
+    ctx.moveTo(corners[0].x, corners[0].y);
+    for (let i = 1; i < 6; i++) {
+        ctx.lineTo(corners[i].x, corners[i].y);
+    }
+    ctx.closePath();
+    
+    // Fill background if needed (for both face up and face down cards)
+    if (backgroundColor) {
+        ctx.fillStyle = backgroundColor;
+        ctx.fill();
+    }
+    
+    // Draw border with half opacity for exhausted cards
+    if (isExhausted) {
+        ctx.globalAlpha = 0.5; // Half opacity for exhausted card borders
+    }
+    
+    ctx.strokeStyle = borderColor;
+    ctx.lineWidth = lineWidth;
+    ctx.stroke();
+    
+    // Reset opacity back to full for content rendering
+    if (isExhausted) {
+        ctx.globalAlpha = 1.0;
+    }
+    
+    // Add visual patterns for different card states
+    if (card.faceDown && showFaceDownCard) {
+        // Draw diagonal stripe pattern based on game mode visibility rules
+        drawDiagonalStripes(x, y, cardHexSize, `${getPlayerColor(card)}20`); // Semi-transparent player color
+    }
+    
+    // Draw text - show face-down cards based on game mode visibility rules
+    const shouldShowCard = !card.faceDown || showFaceDownCard;
+    
+    if (shouldShowCard) {
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillText('?', x, y);
-    } else {
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
+        
+        // Apply additional opacity reduction for visible face-down cards
+        if (card.faceDown && showFaceDownCard) {
+            ctx.globalAlpha *= 0.5; // Further reduce opacity for face-down cards visible to observer
+        }
+        
         if (card.suit === 'joker') {
             ctx.fillStyle = suitColor;
             ctx.font = `bold ${Math.round(20 * zoomLevel)}px Arial`;
@@ -6977,6 +9097,98 @@ function drawCard(card, x, y, isAttackTarget = false, isSelected = false, isMult
             ctx.fillText(suitSymbols[card.suit], x, y + Math.round(6 * zoomLevel));
         }
     }
+    
+    ctx.restore();
+}
+
+/**
+ * Draw diagonal stripes pattern for exhausted cards
+ * @param {number} x - Center X coordinate
+ * @param {number} y - Center Y coordinate  
+ * @param {number} size - Hexagon size
+ * @param {string} color - Stripe color
+ */
+function drawDiagonalStripes(x, y, size, color) {
+    ctx.save();
+    
+    // Create hexagonal clipping path
+    const corners = [];
+    for (let i = 0; i < 6; i++) {
+        const angle = (Math.PI / 3) * i;
+        corners.push({
+            x: x + size * Math.cos(angle),
+            y: y + size * Math.sin(angle)
+        });
+    }
+    
+    ctx.beginPath();
+    ctx.moveTo(corners[0].x, corners[0].y);
+    for (let i = 1; i < 6; i++) {
+        ctx.lineTo(corners[i].x, corners[i].y);
+    }
+    ctx.closePath();
+    ctx.clip();
+    
+    // Draw diagonal stripes
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2 * zoomLevel;
+    
+    const stripeSpacing = 8 * zoomLevel;
+    const numStripes = Math.ceil((size * 2) / stripeSpacing) + 2;
+    
+    for (let i = -numStripes; i <= numStripes; i++) {
+        const offset = i * stripeSpacing;
+        ctx.beginPath();
+        ctx.moveTo(x - size + offset, y - size);
+        ctx.lineTo(x + size + offset, y + size);
+        ctx.stroke();
+    }
+    
+    ctx.restore();
+}
+
+// Draw card being dragged following mouse/touch
+function drawDraggingCard() {
+    if (!dragState.isDragging || !dragState.draggedCard) return;
+    
+    // Get current mouse/touch position
+    let dragX, dragY;
+    
+    if (lastMousePos) {
+        // Use mouse position
+        const coords = getCanvasCoordinates({ clientX: lastMousePos.x, clientY: lastMousePos.y });
+        dragX = coords.x;
+        dragY = coords.y;
+    } else if (lastTouchPos) {
+        // Use touch position  
+        const coords = getCanvasCoordinates({ clientX: lastTouchPos.x, clientY: lastTouchPos.y });
+        dragX = coords.x;
+        dragY = coords.y;
+    } else {
+        // Fallback to drag start position
+        dragX = dragState.startX;
+        dragY = dragState.startY;
+    }
+    
+    // Save current context state
+    ctx.save();
+    
+    // Make the dragged card semi-transparent
+    ctx.globalAlpha = 0.8;
+    
+    // Draw a hex background for the dragged card
+    drawHexagon(dragX, dragY, 'rgba(100, 100, 100, 0.3)', '#fff', 2);
+    
+    // Draw the card on top
+    const card = dragState.draggedCard;
+    
+    // Create display card (face down cards should show as face up when dragged)
+    const displayCard = { ...card };
+    if (card.faceDown) {
+        displayCard.faceDown = false; // Show contents when dragging
+    }
+    
+    drawCard(displayCard, dragX, dragY, false, true, false, false);
     
     ctx.restore();
 }
@@ -7187,6 +9399,9 @@ function updatePlayerStats() {
 }
 
 function resetGame() {
+    // Clear any active fade animations
+    clearAllFadeAnimations();
+    
     // Reset game state
     gameState = {
         currentPlayer: 1,
@@ -7270,17 +9485,33 @@ function handleMenuClose(e) {
     const menuBtn = document.getElementById('menu-btn');
     const settingsMenu = document.getElementById('settings-menu');
     
-    // If menu is open and click is outside the settings menu area
+    // If menu is open and click/tap is outside the settings menu area
     if (!menuOptions.classList.contains('hidden')) {
-        if (!settingsMenu.contains(e.target)) {
+        // Handle both mouse clicks and touch events
+        let target = e.target;
+        
+        // For touch events, we might need to handle differently
+        if (e.type === 'touchend' && e.changedTouches && e.changedTouches.length > 0) {
+            // Get the element at the touch point
+            const touch = e.changedTouches[0];
+            target = document.elementFromPoint(touch.clientX, touch.clientY);
+        }
+        
+        if (target && !settingsMenu.contains(target)) {
             menuOptions.classList.add('hidden');
+            console.log('Menu closed by tapping outside');
         }
     }
 }
 
 // Card drag handlers
 function handleCardDragStart(e, card) {
-    if (card.owner === gameState.currentPlayer && (gameState.phase === 'setup' || !card.rotated)) {
+    if (card.owner === gameState.currentPlayer && (gameState.phase === 'setup' || !isCardExhausted(card))) {
+        // Use new unified drag system
+        const rect = e.target.getBoundingClientRect();
+        startHandCardDrag(card, e.clientX, e.clientY);
+        
+        // Legacy HTML5 drag support
         draggedCard = card;
         e.dataTransfer.effectAllowed = 'move';
         e.dataTransfer.setData('text/plain', card.id);
@@ -7336,79 +9567,6 @@ function handleCardDragEnd(e) {
         updateCursor(hoveredHex[0], hoveredHex[1]);
     } else {
         updateCursor(null, null);
-    }
-}
-
-function handleCanvasDragOver(e) {
-    if (draggedCard) {
-        e.preventDefault();
-        e.dataTransfer.dropEffect = 'move';
-    }
-}
-
-function handleCanvasDrop(e) {
-    if (draggedCard) {
-        e.preventDefault();
-        
-        const coords = getCanvasCoordinates(e);
-        const hex = pixelToHex(coords.x, coords.y);
-        if (hex) {
-            if (gameState.phase === 'setup') {
-                // Allow placing cards anywhere during setup
-                placeCard(draggedCard, hex.row, hex.col);
-            } else if (gameState.phase === 'play') {
-                // Handle movement or placement
-                const currentPos = findCardPosition(draggedCard);
-                if (currentPos) {
-                    // Move existing card
-                    if (gameState.validMoves.some(([r, c]) => r === hex.row && c === hex.col)) {
-                        moveCard(currentPos[0], currentPos[1], hex.row, hex.col);
-                    }
-                } else {
-                    // Place from hand (summoning)
-                    const leaderPos = findLeaderPosition(gameState.currentPlayer);
-                    if (leaderPos && !gameState.leaderAttackedThisTurn) {
-                        const neighbors = getHexNeighbors(leaderPos[0], leaderPos[1]);
-                        // Check if target position is adjacent to leader
-                        if (neighbors.some(([r, c]) => r === hex.row && c === hex.col)) {
-                            const existingCard = gameState.board[hex.row][hex.col];
-                            // Can summon to empty positions or positions with your own cards
-                            if (!existingCard || existingCard.owner === gameState.currentPlayer) {
-                                // Save state before summoning for undo functionality
-                                saveStateToHistory();
-                                
-                                // Try to summon the card (placeCard will handle replacement)
-                                const placementSuccessful = placeCard(draggedCard, hex.row, hex.col);
-                                if (placementSuccessful) {
-                                    gameState.leaderAttackedThisTurn = true; // Mark leader as used for summoning
-                                    gameState.validMoves = []; // Clear summoning highlights
-                                    console.log('Card summoned successfully');
-                                } else {
-                                    console.log('Failed to summon card');
-                                    gameState.validMoves = []; // Clear summoning highlights on failed attempt
-                                }
-                            } else {
-                                console.log('Cannot summon: Position occupied by enemy card');
-                                gameState.validMoves = []; // Clear summoning highlights on failed attempt
-                            }
-                        } else {
-                            console.log('Cannot summon: Position not adjacent to leader');
-                            gameState.validMoves = []; // Clear summoning highlights on failed attempt
-                        }
-                    } else if (!leaderPos) {
-                        console.log('Cannot summon: Leader not on board');
-                        gameState.validMoves = []; // Clear summoning highlights
-                    } else if (gameState.leaderAttackedThisTurn) {
-                        console.log('Cannot summon: Leader already used this turn');
-                        gameState.validMoves = []; // Clear summoning highlights
-                    }
-                }
-            }
-        }
-        
-        draggedCard = null;
-        updateCanvas();
-        updateUI();
     }
 }
 
@@ -7526,27 +9684,6 @@ function handleMapZoom(e) {
     drawGame();
 }
 
-// Hand drop handlers for returning cards from map
-function handleHandDragOver(e) {
-    if (draggedCard) {
-        e.preventDefault();
-        e.dataTransfer.dropEffect = 'move';
-    }
-}
-
-function handleHandDrop(e) {
-    e.preventDefault();
-    if (draggedCard) {
-        // Only allow returning cards to hand if they're owned by current player
-        // and they're currently on the board
-        const currentPos = findCardPosition(draggedCard);
-        if (currentPos && draggedCard.owner === gameState.currentPlayer) {
-            returnCardToHand(draggedCard);
-        }
-        draggedCard = null;
-    }
-}
-
 // Touch event handlers for mobile support
 let touchStartTime = 0;
 let touchStartPos = null;
@@ -7554,6 +9691,11 @@ let lastTouchPos = null;
 let lastTouchDistance = null;
 
 function handleTouchStart(e) {
+    // Check if any drag is already in progress (from hand or board cards)
+    if (handMobileDragState.isDragging || mobileDragState.isDragging || handDesktopDragState.isDragging || desktopDragState.isDragging) {
+        return; // Let the specific drag handlers manage the event
+    }
+    
     e.preventDefault(); // Prevent default touch behaviors
     
     if (e.touches.length === 1) {
@@ -7563,13 +9705,13 @@ function handleTouchStart(e) {
         touchStartPos = { x: touch.clientX, y: touch.clientY };
         lastTouchPos = { x: touch.clientX, y: touch.clientY };
         
-        // Create mock mouse event
+        // Create mock mouse event and use unified drag system
         const mouseEvent = new MouseEvent('mousedown', {
             clientX: touch.clientX,
             clientY: touch.clientY,
             button: 0
         });
-        handleMapDragStart(mouseEvent);
+        handleMouseDown(mouseEvent);
     } else if (e.touches.length === 2) {
         // Two finger touch - prepare for zoom/pan
         isDraggingMap = false;
@@ -7579,6 +9721,11 @@ function handleTouchStart(e) {
 }
 
 function handleTouchMove(e) {
+    // Check if any drag is in progress (from hand or board cards)
+    if (handMobileDragState.isDragging || mobileDragState.isDragging || handDesktopDragState.isDragging || desktopDragState.isDragging) {
+        return; // Let the specific drag handlers manage the event
+    }
+    
     e.preventDefault(); // Prevent scrolling
     
     if (e.touches.length === 1 && lastTouchPos) {
@@ -7615,6 +9762,27 @@ function handleTouchMove(e) {
 }
 
 function handleTouchEnd(e) {
+    // Check if any drag is in progress (from hand or board cards)
+    if (handMobileDragState.isDragging || mobileDragState.isDragging || handDesktopDragState.isDragging || desktopDragState.isDragging) {
+        return; // Let the specific drag handlers manage the event
+    }
+    
+    // Check if this touch should close the menu before processing other game logic
+    const menuOptions = document.getElementById('menu-options');
+    const settingsMenu = document.getElementById('settings-menu');
+    
+    if (!menuOptions.classList.contains('hidden') && e.changedTouches && e.changedTouches.length > 0) {
+        const touch = e.changedTouches[0];
+        const target = document.elementFromPoint(touch.clientX, touch.clientY);
+        
+        if (target && !settingsMenu.contains(target)) {
+            menuOptions.classList.add('hidden');
+            console.log('Menu closed by mobile tap outside');
+            e.preventDefault();
+            return; // Don't process as a game canvas touch
+        }
+    }
+    
     e.preventDefault();
     
     if (e.touches.length === 0) {
@@ -7651,7 +9819,7 @@ function handleTouchEnd(e) {
                 clientX: lastTouchPos.x,
                 clientY: lastTouchPos.y
             });
-            handleMapDragEnd(mouseEvent);
+            handleMouseUp(mouseEvent);
         }
         
         // Reset touch tracking
@@ -7839,6 +10007,10 @@ function placeCard(card, row, col) {
     // Replace existing card if any
     if (gameState.board[row][col] && gameState.board[row][col].owner === card.owner) {
         const replacedCard = gameState.board[row][col];
+        
+        // Show replacement animation
+        startReplacementAnimation(replacedCard, card, [row, col]);
+        
         if (gameState.phase === 'setup') {
             // In setup phase, replaced cards go back to hand
             gameState.players[card.owner].hand.push(replacedCard);
@@ -7854,7 +10026,13 @@ function placeCard(card, row, col) {
         }
     }
     
-    // Place the card
+    // Place the card - summoned cards are face down in play phase
+    if (gameState.phase === 'play' && !currentPos) {
+        // Card being summoned from hand in play phase - place face down
+        card.faceDown = true;
+        console.log(`Card ${card.value}${card.suit} summoned face down`);
+    }
+    
     gameState.board[row][col] = card;
     
     // If this is a leader being placed, update the leader position and leader tracking
@@ -7879,6 +10057,8 @@ function placeCard(card, row, col) {
             updateMapRotation(); // Set map rotation for play mode
             startNewTurn();
         } else {
+            // Update drag overlays for setup phase card placement
+            updateBoardCardOverlays();
             // Auto end turn after card placement in setup
             endTurn();
         }
@@ -7886,6 +10066,25 @@ function placeCard(card, row, col) {
         // Mark leader as used for this turn (one action limit)
         gameState.leaderAttackedThisTurn = true;
         console.log(`[AI DEBUG] Leader marked as used this turn for card placement at [${row},${col}]`);
+        
+        // Update drag overlays so newly summoned cards can be dragged immediately
+        updateBoardCardOverlays();
+        
+        // Auto-select the summoned card to show available actions (only for human players)
+        if (card.owner === gameState.currentPlayer && !aiEnabled[gameState.currentPlayer]) {
+            setTimeout(() => {
+                // Check if the card has any available actions
+                const hasAttacks = !gameState.cardsAttackedThisTurn.has(card.id) && getValidAttacks(card, row, col).length > 0;
+                const hasMovement = !gameState.cardsMovedThisTurn.has(card.id) && getValidMoves(card, row, col).length > 0;
+                
+                if (hasAttacks || hasMovement) {
+                    selectCard(card, row, col);
+                    console.log(`Auto-selected ${card.value}${card.suit} after summoning (${hasAttacks ? 'attacks' : ''}${hasAttacks && hasMovement ? ' and ' : ''}${hasMovement ? 'movement' : ''} available)`);
+                } else {
+                    console.log(`Skipped auto-selection of ${card.value}${card.suit} - no remaining actions`);
+                }
+            }, 150); // Slightly longer delay to ensure canvas and overlays are updated
+        }
     }
     
     return true; // Card placed successfully
@@ -7993,39 +10192,6 @@ function findCardById(cardId) {
         }
     }
     return null;
-}
-
-function returnCardToHand(card) {
-    // Find the card's position on the board
-    const currentPos = findCardPosition(card);
-    if (currentPos) {
-        // Remove from board
-        gameState.board[currentPos[0]][currentPos[1]] = null;
-        
-        // Add back to hand
-        gameState.players[card.owner].hand.push(card);
-        
-        // If this was a leader, clear the leader position and leader tracking
-        if (card.suit === 'joker') {
-            gameState.players[card.owner].leaderPosition = null;
-            if (gameState.phase === 'setup') {
-                gameState.setupLeaderPlaced[card.owner] = false;
-            }
-        }
-        
-        // Update setup card count if in setup phase
-        if (gameState.phase === 'setup') {
-            gameState.setupCardsPlaced[card.owner]--;
-        }
-        
-        // Update UI
-        updateHand();
-        updateCanvas();
-        updateUI();
-        saveGameState();
-        return true;
-    }
-    return false;
 }
 
 // Convert column index to letter (0=A, 1=B, 2=C, etc.)
