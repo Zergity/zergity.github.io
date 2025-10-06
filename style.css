@@ -79,6 +79,24 @@ body {
     transform: scale(0.8);
 }
 
+.card-fade-overlay.survived {
+    border: 3px solid #3399ff !important;
+    box-shadow: 0 0 30px 8px #3399ff, 0 0 60px 16px #00e0ff44 !important;
+}
+.card-fade-overlay.survived.fade-out {
+    opacity: 0;
+    transform: scale(1.05);
+}
+
+.card-fade-overlay.discarded {
+    border: 3px solid #ff4444 !important;
+    box-shadow: 0 0 30px 8px #ff4444, 0 0 60px 16px #ff000044 !important;
+}
+.card-fade-overlay.discarded.fade-out {
+    opacity: 0;
+    transform: scale(1.1) rotate(5deg);
+}
+
 .card-fade-overlay.discarded {
     transition: opacity 0.8s ease-out, transform 0.8s ease-out;
 }
@@ -156,22 +174,62 @@ body {
 
 .card-fade-overlay.attacker-highlight.attacking {
     opacity: 0;
+}
+
+/* Target highlight animation */
+.card-fade-overlay.target-highlight {
+    transition: all 1.5s ease-out;
+    animation: defend-pulse 0.4s ease-in-out 3;
+}
+
+.card-fade-overlay.target-highlight.defending {
+    opacity: 0;
     transform: scale(1.2);
     box-shadow: 0 0 40px rgba(255, 215, 0, 0);
 }
 
 @keyframes attack-pulse {
-    0% { 
+    0%, 100% { 
         transform: scale(1); 
         box-shadow: 0 0 20px rgba(255, 215, 0, 0.8); 
     }
     50% { 
-        transform: scale(1.15); 
-        box-shadow: 0 0 30px rgba(255, 215, 0, 1), 0 0 60px rgba(255, 215, 0, 0.5); 
+        transform: scale(1.1); 
+        box-shadow: 0 0 30px rgba(255, 215, 0, 1); 
+    }
+}
+
+@keyframes defend-pulse {
+    0%, 100% { 
+        transform: scale(1); 
+        box-shadow: 0 0 20px rgba(255, 68, 68, 0.8); 
+    }
+    50% { 
+        transform: scale(1.05); 
+        box-shadow: 0 0 25px rgba(255, 68, 68, 1); 
+    }
+}
+
+@keyframes battle-casualty {
+    0% { 
+        transform: scale(1); 
+        opacity: 1; 
+    }
+    25% { 
+        transform: scale(1.2) rotate(-5deg); 
+        opacity: 0.8; 
+    }
+    50% { 
+        transform: scale(1.1) rotate(5deg); 
+        opacity: 0.6; 
+    }
+    75% { 
+        transform: scale(0.9) rotate(-3deg); 
+        opacity: 0.3; 
     }
     100% { 
-        transform: scale(1); 
-        box-shadow: 0 0 20px rgba(255, 215, 0, 0.8); 
+        transform: scale(0.8) rotate(0deg); 
+        opacity: 0; 
     }
 }
 

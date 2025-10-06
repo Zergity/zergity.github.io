@@ -4962,7 +4962,7 @@ function showPlayerWinCaption(player) {
 }
 
 // HTML5/CSS fade-out animation functions
-function startFadeOutAnimation(card, position, animationType = 'captured') {
+function startFadeOutAnimation(card, position, animationType = 'captured', battleContext = null) {
     // Get the canvas position for this card
     const pos = hexToPixel(position[1], position[0]);
     const canvas = document.getElementById('hex-canvas');
@@ -4972,20 +4972,20 @@ function startFadeOutAnimation(card, position, animationType = 'captured') {
     const overlay = document.createElement('div');
     overlay.className = `card card-fade-overlay ${animationType}`;
     
-    // Position overlay exactly over the canvas card - make it larger
+    // Position overlay exactly over the canvas card - same size as battle animations
     overlay.style.position = 'absolute';
-    overlay.style.left = (canvasRect.left + pos.x - 24) + 'px'; // Center on card (24px = half larger card width)
-    overlay.style.top = (canvasRect.top + pos.y - 32) + 'px'; // Center on card (32px = half larger card height)
-    overlay.style.width = '48px';  // 1.5x larger than hand cards
-    overlay.style.height = '64px'; // 1.5x larger than hand cards
-    overlay.style.zIndex = '1001';
+    overlay.style.left = (canvasRect.left + pos.x - 28) + 'px'; // Same size as battle cards
+    overlay.style.top = (canvasRect.top + pos.y - 36) + 'px';
+    overlay.style.width = '56px'; // Same size as battle animations
+    overlay.style.height = '72px'; // Same size as battle animations
+    overlay.style.zIndex = '1006'; // Above battle animations
     overlay.style.pointerEvents = 'none';
     
     // Set card colors - use player color for background
     const playerColor = getPlayerColor(card);
     const suitColor = card.faceDown ? '#888' : getSuitColor(card.suit, card);
     
-    overlay.style.border = `2px solid ${playerColor}`;
+    overlay.style.border = `3px solid ${playerColor}`;
     overlay.style.backgroundColor = card.faceDown ? '#333' : playerColor;
     
     // Add special styling for leaders (jokers)
@@ -4997,32 +4997,57 @@ function startFadeOutAnimation(card, position, animationType = 'captured') {
     if (!card.faceDown) {
         const valueDiv = document.createElement('div');
         valueDiv.className = 'card-value';
-        valueDiv.style.fontSize = '20px'; // Larger font for bigger card
+        valueDiv.style.fontSize = '22px'; // Same size as battle animations
         valueDiv.style.color = suitColor; // Use suit color for text
         valueDiv.textContent = card.suit === 'joker' ? '★' : card.value;
         overlay.appendChild(valueDiv);
         
         const suitDiv = document.createElement('div');
         suitDiv.className = 'card-suit';
-        suitDiv.style.fontSize = '22px'; // Larger font for bigger card
+        suitDiv.style.fontSize = '24px'; // Same size as battle animations
         suitDiv.style.color = suitColor; // Use suit color for text
         suitDiv.textContent = getSuitSymbol(card.suit);
         overlay.appendChild(suitDiv);
     }
     
+    // Add battle result effect indicator
+    const effectDiv = document.createElement('div');
+    effectDiv.style.position = 'absolute';
+    effectDiv.style.top = '-15px';
+    effectDiv.style.right = '-15px';
+    effectDiv.style.fontSize = '20px';
+    effectDiv.style.fontWeight = 'bold';
+    effectDiv.style.textShadow = '0 0 10px #000';
+    effectDiv.style.animation = 'flash-red 0.2s ease-in-out 4';
+    
+    if (animationType === 'captured') {
+        effectDiv.textContent = '🏆'; // Trophy for captured
+        effectDiv.style.color = '#ffd700';
+        overlay.style.boxShadow = '0 0 30px rgba(255, 215, 0, 0.8)';
+    } else if (animationType === 'discarded') {
+        effectDiv.textContent = '💀'; // Skull for discarded
+        effectDiv.style.color = '#ff4444';
+        overlay.style.boxShadow = '0 0 30px rgba(255, 68, 68, 0.8)';
+    }
+    overlay.appendChild(effectDiv);
+    
     // Add to DOM
     document.body.appendChild(overlay);
     fadeOutElements.push(overlay);
     
-    // Trigger fade-out animation
+    // Trigger fade-out animation with enhanced effects
     requestAnimationFrame(() => {
         overlay.classList.add('fade-out');
+        // Add dramatic pulsing for battle casualties
+        if (battleContext) {
+            overlay.style.animation = 'battle-casualty 0.8s ease-out';
+        }
     });
     
     // Remove card from board immediately and clean up overlay after animation
     gameState.board[position[0]][position[1]] = null;
     
-    const duration = animationType === 'captured' ? 600 : 800;
+    const duration = animationType === 'captured' ? 800 : 1000; // Longer for better visibility
     setTimeout(() => {
         if (overlay.parentNode) {
             overlay.parentNode.removeChild(overlay);
@@ -5206,68 +5231,178 @@ function startReplacementAnimation(oldCard, newCard, position) {
     }, 1800);
 }
 
-// Attack animation - shows attacker cards briefly
-function startAttackAnimation(attackers, targetPosition) {
+// Attack animation - shows attacker cards briefly and targets at same size
+function startAttackAnimation(attackers, targetPosition, battleResults = null) {
     if (!attackers || attackers.length === 0) return;
     
     const canvas = document.getElementById('hex-canvas');
     const canvasRect = canvas.getBoundingClientRect();
     
-    // Get target position for animation direction
+    // Get target position and target card
     const targetPos = hexToPixel(targetPosition[1], targetPosition[0]);
+    const targetCard = gameState.board[targetPosition[0]][targetPosition[1]];
     
+    // First, create and show the target overlay at same size as attackers
+    if (targetCard) {
+        const targetOverlay = document.createElement('div');
+        let resultType = '';
+        if (battleResults) {
+            if (battleResults.targetCaptured && targetCard.suit !== 'joker') {
+                resultType = 'captured';
+            } else if (battleResults.isLeaderAttack) {
+                resultType = 'leader';
+            } else {
+                resultType = 'survived';
+            }
+        }
+        targetOverlay.className = `card card-fade-overlay target-highlight ${resultType}`;
+        // Position target overlay - same size as attackers
+        targetOverlay.style.position = 'absolute';
+        targetOverlay.style.left = (canvasRect.left + targetPos.x - 28) + 'px';
+        targetOverlay.style.top = (canvasRect.top + targetPos.y - 36) + 'px';
+        targetOverlay.style.width = '56px';
+        targetOverlay.style.height = '72px';
+        targetOverlay.style.zIndex = '1004';
+        targetOverlay.style.pointerEvents = 'none';
+        // Style by result
+        if (resultType === 'captured') {
+            targetOverlay.style.border = '3px solid #ffd700';
+            targetOverlay.style.boxShadow = '0 0 30px 8px #ffd700, 0 0 60px 16px #fff20044';
+        } else if (resultType === 'survived') {
+            targetOverlay.style.border = '3px solid #3399ff';
+            targetOverlay.style.boxShadow = '0 0 30px 8px #3399ff, 0 0 60px 16px #00e0ff44';
+        } else {
+            // Default/leader
+            targetOverlay.style.border = '3px solid #ff4444';
+            targetOverlay.style.boxShadow = '0 0 20px rgba(255, 68, 68, 0.8), 0 0 40px rgba(255, 68, 68, 0.4)';
+        }
+        targetOverlay.style.backgroundColor = getPlayerColor(targetCard);
+        // Add special styling for leader targets
+        if (targetCard.suit === 'joker') {
+            targetOverlay.classList.add('joker', `player${targetCard.owner}`);
+        }
+        // Add target card content
+        if (!targetCard.faceDown) {
+            const valueDiv = document.createElement('div');
+            valueDiv.className = 'card-value';
+            valueDiv.style.fontSize = '22px';
+            valueDiv.style.color = getSuitColor(targetCard.suit, targetCard);
+            valueDiv.style.textShadow = '0 0 10px #222';
+            valueDiv.textContent = targetCard.suit === 'joker' ? '★' : targetCard.value;
+            targetOverlay.appendChild(valueDiv);
+            const suitDiv = document.createElement('div');
+            suitDiv.className = 'card-suit';
+            suitDiv.style.fontSize = '24px';
+            suitDiv.style.color = getSuitColor(targetCard.suit, targetCard);
+            suitDiv.style.textShadow = '0 0 10px #222';
+            suitDiv.textContent = getSuitSymbol(targetCard.suit);
+            targetOverlay.appendChild(suitDiv);
+        }
+        // Add target indicator
+        const targetDiv = document.createElement('div');
+        targetDiv.style.position = 'absolute';
+        targetDiv.style.top = '-10px';
+        targetDiv.style.left = '-10px';
+        targetDiv.style.fontSize = '16px';
+        targetDiv.style.color = '#ff4444';
+        targetDiv.style.textShadow = '0 0 5px #ff4444';
+        targetDiv.textContent = '🎯';
+        targetOverlay.appendChild(targetDiv);
+        // Add battle result indicator for target
+        if (battleResults) {
+            const resultDiv = document.createElement('div');
+            resultDiv.style.position = 'absolute';
+            resultDiv.style.bottom = '-10px';
+            resultDiv.style.right = '-10px';
+            resultDiv.style.fontSize = '18px';
+            resultDiv.style.fontWeight = 'bold';
+            resultDiv.style.textShadow = '0 0 5px #000';
+            if (resultType === 'captured') {
+                resultDiv.textContent = '🏆';
+                resultDiv.style.color = '#ffd700';
+            } else if (resultType === 'survived') {
+                resultDiv.textContent = '🛡️';
+                resultDiv.style.color = '#3399ff';
+            } else if (resultType === 'leader') {
+                resultDiv.textContent = '💥';
+                resultDiv.style.color = '#ffd700';
+            }
+            targetOverlay.appendChild(resultDiv);
+        }
+        // Add to DOM
+        document.body.appendChild(targetOverlay);
+        fadeOutElements.push(targetOverlay);
+        // Start target animation
+        requestAnimationFrame(() => {
+            targetOverlay.classList.add('defending');
+        });
+        // Clean up target overlay
+        setTimeout(() => {
+            if (targetOverlay.parentNode) {
+                targetOverlay.parentNode.removeChild(targetOverlay);
+            }
+            fadeOutElements = fadeOutElements.filter(el => el !== targetOverlay);
+        }, 2000);
+    }
+    
+    // Now create attacker overlays
     attackers.forEach((attacker, index) => {
-        const attackerCard = attacker.card || attacker; // Handle both {card, position} and direct card objects
+        const attackerCard = attacker.card || attacker;
         const attackerPos = attacker.position || findCardPosition(attackerCard);
-        
         if (!attackerPos) return;
-        
         const pos = hexToPixel(attackerPos[1], attackerPos[0]);
-        
+        // Determine result type for attacker
+        let resultType = '';
+        let isAttackerDestroyed = false;
+        if (battleResults) {
+            isAttackerDestroyed = battleResults.attackersCasualites && battleResults.attackersCasualites.some(casualty => casualty.id === attackerCard.id);
+            if (isAttackerDestroyed && attackerCard.suit !== 'joker') {
+                resultType = 'discarded';
+            } else {
+                resultType = 'survived';
+            }
+        }
         // Create attacker overlay
         const overlay = document.createElement('div');
-        overlay.className = 'card card-fade-overlay attacker-highlight';
-        
-        // Position overlay over attacker
+        overlay.className = `card card-fade-overlay attacker-highlight ${resultType}`;
         overlay.style.position = 'absolute';
-        overlay.style.left = (canvasRect.left + pos.x - 28) + 'px'; // Slightly larger for attack highlight
+        overlay.style.left = (canvasRect.left + pos.x - 28) + 'px';
         overlay.style.top = (canvasRect.top + pos.y - 36) + 'px';
-        overlay.style.width = '56px';  // Larger for emphasis
+        overlay.style.width = '56px';
         overlay.style.height = '72px';
         overlay.style.zIndex = '1005';
         overlay.style.pointerEvents = 'none';
-        
-        // Style attacker card with attack effects
-        const playerColor = getPlayerColor(attackerCard);
-        const suitColor = getSuitColor(attackerCard.suit, attackerCard);
-        overlay.style.border = `3px solid #ffd700`; // Gold border for attacking
-        overlay.style.backgroundColor = playerColor;
-        overlay.style.boxShadow = '0 0 20px rgba(255, 215, 0, 0.8), 0 0 40px rgba(255, 215, 0, 0.4)';
-        
-        // Add special styling for leaders
+        // Style by result
+        if (resultType === 'discarded') {
+            overlay.style.border = '3px solid #ff4444';
+            overlay.style.boxShadow = '0 0 30px 8px #ff4444, 0 0 60px 16px #ff000044';
+        } else if (resultType === 'survived') {
+            overlay.style.border = '3px solid #3399ff';
+            overlay.style.boxShadow = '0 0 30px 8px #3399ff, 0 0 60px 16px #00e0ff44';
+        } else {
+            overlay.style.border = '3px solid #ffd700';
+            overlay.style.boxShadow = '0 0 20px rgba(255, 215, 0, 0.8), 0 0 40px rgba(255, 215, 0, 0.4)';
+        }
+        overlay.style.backgroundColor = getPlayerColor(attackerCard);
         if (attackerCard.suit === 'joker') {
             overlay.classList.add('joker', `player${attackerCard.owner}`);
         }
-        
-        // Add card content
         if (!attackerCard.faceDown) {
             const valueDiv = document.createElement('div');
             valueDiv.className = 'card-value';
             valueDiv.style.fontSize = '22px';
-            valueDiv.style.color = suitColor;
-            valueDiv.style.textShadow = '0 0 10px #ffd700';
+            valueDiv.style.color = getSuitColor(attackerCard.suit, attackerCard);
+            valueDiv.style.textShadow = '0 0 10px #222';
             valueDiv.textContent = attackerCard.suit === 'joker' ? '★' : attackerCard.value;
             overlay.appendChild(valueDiv);
-            
             const suitDiv = document.createElement('div');
             suitDiv.className = 'card-suit';
             suitDiv.style.fontSize = '24px';
-            suitDiv.style.color = suitColor;
-            suitDiv.style.textShadow = '0 0 10px #ffd700';
+            suitDiv.style.color = getSuitColor(attackerCard.suit, attackerCard);
+            suitDiv.style.textShadow = '0 0 10px #222';
             suitDiv.textContent = getSuitSymbol(attackerCard.suit);
             overlay.appendChild(suitDiv);
         }
-        
         // Add attack indicator
         const attackDiv = document.createElement('div');
         attackDiv.style.position = 'absolute';
@@ -5278,25 +5413,40 @@ function startAttackAnimation(attackers, targetPosition) {
         attackDiv.style.textShadow = '0 0 5px #ff4444';
         attackDiv.textContent = '⚔️';
         overlay.appendChild(attackDiv);
-        
-        // Add to DOM
+        // Add battle result indicator for attacker
+        if (battleResults) {
+            const resultDiv = document.createElement('div');
+            resultDiv.style.position = 'absolute';
+            resultDiv.style.bottom = '-10px';
+            resultDiv.style.left = '-10px';
+            resultDiv.style.fontSize = '18px';
+            resultDiv.style.fontWeight = 'bold';
+            resultDiv.style.textShadow = '0 0 5px #000';
+            if (resultType === 'discarded') {
+                resultDiv.textContent = '💀';
+                resultDiv.style.color = '#ff4444';
+            } else if (resultType === 'survived') {
+                resultDiv.textContent = '🛡️';
+                resultDiv.style.color = '#3399ff';
+            } else {
+                resultDiv.textContent = '🏆';
+                resultDiv.style.color = '#ffd700';
+            }
+            overlay.appendChild(resultDiv);
+        }
         document.body.appendChild(overlay);
         fadeOutElements.push(overlay);
-        
-        // Stagger the animation start for multiple attackers
         setTimeout(() => {
             requestAnimationFrame(() => {
                 overlay.classList.add('attacking');
             });
         }, index * 100);
-        
-        // Clean up after animation
         setTimeout(() => {
             if (overlay.parentNode) {
                 overlay.parentNode.removeChild(overlay);
             }
             fadeOutElements = fadeOutElements.filter(el => el !== overlay);
-        }, 1500 + (index * 100));
+        }, 2000 + (index * 100));
     });
 }
 
@@ -5306,8 +5456,10 @@ function initGame(preserveAISettings = false) {
     canvas = document.getElementById('hex-canvas');
     ctx = canvas.getContext('2d');
     
-    // Set up canvas to fill viewport
-    resizeCanvas();
+    if (!preserveAISettings) {
+        // Set up canvas to fill viewport
+        resizeCanvas();
+    }
     
     hexWidth = hexSize * 2;
     hexHeight = hexSize * Math.sqrt(3);
@@ -7637,9 +7789,6 @@ function performCombinedAttack(targetRow, targetCol) {
     const target = gameState.board[targetRow][targetCol];
     if (!target) return;
     
-    // Show attack animation for all attacking cards
-    startAttackAnimation(gameState.selectedCards, [targetRow, targetCol]);
-    
     // Automatically face up all cards involved in attack
     // Face up all attacking cards
     for (const selected of gameState.selectedCards) {
@@ -7668,6 +7817,17 @@ function performCombinedAttack(targetRow, targetCol) {
         targetRow, targetCol, target.owner
     );
     const actualDefender = absorber || target;
+    
+    // Prepare battle results for animation
+    const battleResults = {
+        targetCaptured: totalAttack >= actualDefender.defense && actualDefender.suit !== 'joker',
+        isLeaderAttack: actualDefender.suit === 'joker',
+        attackersCasualites: [], // Will be filled after battle resolution
+        actualDefender: actualDefender
+    };
+    
+    // Show attack animation for all attacking cards
+    startAttackAnimation(gameState.selectedCards, [targetRow, targetCol], battleResults);
     
     // Face up spade absorber if it's different from the original target
     if (absorber && absorber !== target && absorber.faceDown) {
@@ -7704,7 +7864,7 @@ function performCombinedAttack(targetRow, targetCol) {
             } else {
                 // Regular card in combined attack - discard it
                 gameState.players[gameState.currentPlayer].discarded.push(selected.card);
-                startFadeOutAnimation(selected.card, selected.position, 'discarded');
+                startFadeOutAnimation(selected.card, selected.position, 'discarded', true);
                 console.log(`Card ${selected.card.suit} ${selected.card.value} discarded after combined attack on enemy leader`);
             }
         }
@@ -7736,14 +7896,14 @@ function performCombinedAttack(targetRow, targetCol) {
                     console.error('CRITICAL ERROR: Attempted to remove absorbing leader! This should never happen!');
                     return;
                 }
-                startFadeOutAnimation(actualDefender, absorberPos, 'captured');
+                startFadeOutAnimation(actualDefender, absorberPos, 'captured', true);
             } else {
                 // No absorption - remove the original target (SAFETY: Never remove leaders!)
                 if (target.suit === 'joker') {
                     console.error('CRITICAL ERROR: Attempted to remove leader from board in combined attack! This should never happen!');
                     return;
                 }
-                startFadeOutAnimation(target, [targetRow, targetCol], 'captured');
+                startFadeOutAnimation(target, [targetRow, targetCol], 'captured', true);
             }
         } else {
             // Defender survives - mark as exhausted (unless it's a leader)
@@ -7766,7 +7926,7 @@ function performCombinedAttack(targetRow, targetCol) {
                 } else {
                     // Attacker is destroyed by counter-attack - goes to attacker's discarded stack
                     gameState.players[gameState.currentPlayer].discarded.push(attacker);
-                    startFadeOutAnimation(attacker, selected.position, 'discarded');
+                    startFadeOutAnimation(attacker, selected.position, 'discarded', true);
                 }
             } else {
                 // Attacker survives - mark as exhausted
@@ -8223,9 +8383,6 @@ function attack(fromRow, fromCol, toRow, toCol) {
     
     if (!defender) return;
     
-    // Show attack animation for the attacking card
-    startAttackAnimation([attacker], [toRow, toCol]);
-    
     // SAFETY: Check if attacker is exhausted
     if (isCardExhausted(attacker)) {
         console.error('CRITICAL ERROR: Attempted to attack with exhausted card! This should never happen!');
@@ -8252,6 +8409,17 @@ function attack(fromRow, fromCol, toRow, toCol) {
     // Check for spade absorption
     const absorber = findSpadeAbsorber(fromRow, fromCol, toRow, toCol, defender.owner);
     const actualDefender = absorber || defender;
+    
+    // Prepare battle results for animation
+    const battleResults = {
+        targetCaptured: attacker.attack >= actualDefender.defense && actualDefender.suit !== 'joker',
+        isLeaderAttack: actualDefender.suit === 'joker',
+        attackersCasualites: actualDefender.attack >= attacker.defense && attacker.suit !== 'joker' ? [attacker] : [],
+        actualDefender: actualDefender
+    };
+    
+    // Show attack animation for the attacking card
+    startAttackAnimation([{card: attacker, position: [fromRow, fromCol]}], [toRow, toCol], battleResults);
     
     // If there's an absorber, face it up too
     if (absorber && absorber.faceDown) {
@@ -8294,7 +8462,7 @@ function attack(fromRow, fromCol, toRow, toCol) {
         } else {
             // Regular card attacking leader - discard the attacker
             gameState.players[attacker.owner].discarded.push(attacker);
-            startFadeOutAnimation(attacker, [fromRow, fromCol], 'discarded');
+            startFadeOutAnimation(attacker, [fromRow, fromCol], 'discarded', true);
             console.log(`Card ${attacker.suit} ${attacker.value} discarded after attacking enemy leader`);
         }
     } else {
@@ -8327,14 +8495,14 @@ function attack(fromRow, fromCol, toRow, toCol) {
                     console.error('CRITICAL ERROR: Attempted to remove absorbing leader! This should never happen!');
                     return;
                 }
-                startFadeOutAnimation(actualDefender, absorberPos, 'captured');
+                startFadeOutAnimation(actualDefender, absorberPos, 'captured', true);
             } else {
                 // No absorption - remove the original target (SAFETY: Never remove leaders!)
                 if (defender.suit === 'joker') {
                     console.error('CRITICAL ERROR: Attempted to remove leader from board in single attack! This should never happen!');
                     return;
                 }
-                startFadeOutAnimation(defender, [toRow, toCol], 'captured');
+                startFadeOutAnimation(defender, [toRow, toCol], 'captured', true);
             }
         } else {
             // Defender survives - mark as exhausted (unless it's a leader)
@@ -8354,7 +8522,7 @@ function attack(fromRow, fromCol, toRow, toCol) {
             } else {
                 // Attacker is destroyed by counter-attack - goes to attacker's discarded stack
                 gameState.players[attacker.owner].discarded.push(attacker);
-                startFadeOutAnimation(attacker, [fromRow, fromCol], 'discarded');
+                startFadeOutAnimation(attacker, [fromRow, fromCol], 'discarded', true);
             }
         } else {
             // Attacker survives - mark as exhausted
@@ -8390,7 +8558,12 @@ function attack(fromRow, fromCol, toRow, toCol) {
         updateScreenWakeLock(); // Release wake lock when game ends
         showPlayerWinCaption(attacker.owner);
         setTimeout(() => {
-            alert(`Player ${attacker.owner} wins!`);
+            if (isBotVsBot()) {
+                console.log('Bot vs Bot: Auto-restarting new game after 10s.');
+                setTimeout(() => {
+                    resetGame();
+                }, 10000);
+            }
         }, 1000);
     }
 }
@@ -8711,7 +8884,12 @@ function checkAggressorRule() {
         // Display win message
         showPlayerWinCaption(winner);
         setTimeout(() => {
-            alert(`⚔️ AGGRESSOR RULE VICTORY!\n\n${winReason}\n\nThe game reached 100 moves without a clear winner by captures.`);
+            if (isBotVsBot()) {
+                console.log('Bot vs Bot: Auto-restarting new game after 10s.');
+                setTimeout(() => {
+                    resetGame();
+                }, 10000);
+            }
         }, 1000);
         
         return true; // Game ended
@@ -9260,16 +9438,6 @@ function updateUI() {
     
     // Update player stats
     updatePlayerStats();
-    
-    // Hide/disable undo button for AI players
-    const undoBtn = document.getElementById('undo-btn');
-    if (undoBtn) {
-        if (aiEnabled[gameState.currentPlayer]) {
-            undoBtn.style.display = 'none'; // Hide button during AI turn
-        } else {
-            undoBtn.style.display = 'inline-block'; // Show button for human players
-        }
-    }
 }
 
 function updateAIThinkingUI() {
@@ -9317,14 +9485,6 @@ function updateAIThinkingUI() {
         aiThinkingElement.style.opacity = opacity;
     } else {
         aiThinkingElement.style.display = 'none';
-    }
-    
-    // Show/hide undo button
-    const undoBtn = document.getElementById('undo-btn');
-    if (gameState.phase === 'play' && gameHistory.length > 0) {
-        undoBtn.style.display = 'block';
-    } else {
-        undoBtn.style.display = 'none';
     }
     
     // Switch Player button removed - using END TURN card for both modes
