@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" href="data:,">
+<title>WalletConnect Signer</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #1a1a2e; color: #eee; padding: 20px; min-height: 100vh; }
+  h1 { font-size: 1.4em; margin-bottom: 16px; color: #7c83ff; }
+  .section { background: #16213e; border-radius: 8px; padding: 16px; margin-bottom: 12px; }
+  .section h2 { font-size: 1em; margin-bottom: 8px; color: #aaa; }
+  button { background: #7c83ff; color: #fff; border: none; border-radius: 6px; padding: 8px 16px; cursor: pointer; font-size: 0.9em; }
+  button:hover { background: #6a71e0; }
+  button:disabled { background: #444; cursor: not-allowed; }
+  button.danger { background: #e74c3c; }
+  button.danger:hover { background: #c0392b; }
+  input, textarea { width: 100%; background: #0f3460; border: 1px solid #333; border-radius: 6px; padding: 8px; color: #eee; font-family: monospace; font-size: 0.85em; }
+  textarea { resize: vertical; min-height: 60px; }
+  .status { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; }
+  .status.green { background: #2ecc71; }
+  .status.red { background: #e74c3c; }
+  .status.yellow { background: #f39c12; }
+  #log { background: #0a0a1a; border-radius: 6px; padding: 12px; font-family: monospace; font-size: 0.8em; max-height: 400px; overflow-y: auto; white-space: pre-wrap; word-break: break-all; }
+  .log-entry { margin-bottom: 4px; padding: 2px 0; border-bottom: 1px solid #1a1a2e; }
+  .log-entry.error { color: #e74c3c; }
+  .log-entry.success { color: #2ecc71; }
+  .log-entry.info { color: #3498db; }
+  .row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+  .row > input { flex: 1; }
+  .flex-col { display: flex; flex-direction: column; gap: 8px; }
+  #requests .request-entry { background: #0f3460; border-radius: 6px; padding: 8px 12px; margin-bottom: 6px; font-family: monospace; font-size: 0.8em; }
+  #requests .request-entry.pending { border-left: 3px solid #f39c12; }
+  #requests .request-entry.success { border-left: 3px solid #2ecc71; }
+  #requests .request-entry.error { border-left: 3px solid #e74c3c; }
+  .chain-badge { background: #7c83ff33; color: #7c83ff; padding: 2px 8px; border-radius: 4px; font-size: 0.8em; }
+</style>
+</head>
+<body>
+
+<h1>WC Signer Bridge</h1>
+
+<div class="section">
+  <h2><span class="status red" id="walletStatus"></span>Browser Wallet</h2>
+  <div class="row">
+    <input id="walletAddr" readonly placeholder="Not connected">
+    <button id="connectWalletBtn" onclick="connectWallet()">Connect</button>
+  </div>
+</div>
+
+<div class="section">
+  <h2><span class="status red" id="wcStatus"></span>WalletConnect</h2>
+  <div class="row">
+    <input id="wcUri" placeholder="Paste wc: URI here...">
+    <button id="pairBtn" onclick="pair()" disabled>Pair</button>
+  </div>
+  <div id="sessionInfo" style="display:none; margin-top:8px;">
+    <div class="row">
+      <span>Session: <code id="sessionTopic" style="font-size:0.8em"></code></span>
+      <button class="danger" onclick="disconnectSession()">Disconnect</button>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <div class="row"><h2 style="flex:1">Requests</h2><button onclick="document.getElementById('requests').innerHTML='&lt;em style=color:#666&gt;No requests yet&lt;/em&gt;'">Clear</button></div>
+  <div id="requests"><em style="color:#666">No requests yet</em></div>
+</div>
+
+<div class="section">
+  <div class="row"><h2 style="flex:1">Log</h2><button onclick="document.getElementById('log').innerHTML=''">Clear</button></div>
+  <div id="log"></div>
+</div>
+
+<script type="module">
+import SignClient from 'https://esm.sh/@walletconnect/sign-client@2';
+
+let signClient = null;
+let activeSession = null;
+let walletAddress = null;
+let walletChainId = null;
+
+function log(msg, type = '') {
+  const el = document.getElementById('log');
+  const entry = document.createElement('div');
+  entry.className = 'log-entry ' + type;
+  entry.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+  el.prepend(entry);
+}
+
+window.log = log;
+
+async function initSignClient() {
+  log('Initializing WalletConnect SignClient...', 'info');
+  try {
+    signClient = await SignClient.init({
+      projectId: 'f070914f4276a479f4b16d41b9f9f500',
+      metadata: {
+        name: 'WC Signer Bridge',
+        description: 'Bridge signing requests to browser wallet',
+        url: window.location.origin,
+        icons: ['https://avatars.githubusercontent.com/u/110451741'],
+      },
+    });
+    log('SignClient ready', 'success');
+
+    signClient.on('session_proposal', onSessionProposal);
+    signClient.on('session_request', onSessionRequest);
+    signClient.on('session_delete', onSessionDelete);
+
+    document.getElementById('pairBtn').disabled = false;
+  } catch (e) {
+    log('SignClient init failed: ' + e.message, 'error');
+  }
+}
+
+async function onSessionProposal({ id, params }) {
+  log('Session proposal received: ' + params.proposer.metadata.name, 'info');
+  try {
+    const chains = [];
+    const methods = [];
+    const events = [];
+
+    // Collect from required namespaces
+    for (const [key, ns] of Object.entries(params.requiredNamespaces || {})) {
+      if (ns.chains) chains.push(...ns.chains);
+      if (ns.methods) methods.push(...ns.methods);
+      if (ns.events) events.push(...ns.events);
+    }
+    // Collect from optional namespaces
+    for (const [key, ns] of Object.entries(params.optionalNamespaces || {})) {
+      if (ns.chains) chains.push(...ns.chains);
+      if (ns.methods) methods.push(...ns.methods);
+      if (ns.events) events.push(...ns.events);
+    }
+
+    const uniqueChains = [...new Set(chains)].filter(c => c.startsWith('eip155:'));
+    if (uniqueChains.length === 0) uniqueChains.push(`eip155:${walletChainId}`);
+
+    const accounts = uniqueChains.map(c => `${c}:${walletAddress}`);
+    const uniqueMethods = [...new Set(methods)];
+    const uniqueEvents = [...new Set(events)];
+
+    const namespaces = {
+      eip155: {
+        accounts,
+        methods: uniqueMethods.length > 0 ? uniqueMethods : [
+          'eth_sendTransaction', 'personal_sign',
+          'eth_sign', 'eth_signTypedData', 'eth_signTypedData_v4',
+        ],
+        events: uniqueEvents.length > 0 ? uniqueEvents : ['chainChanged', 'accountsChanged'],
+        chains: uniqueChains,
+      }
+    };
+
+    const { acknowledged } = await signClient.approve({ id, namespaces });
+    activeSession = await acknowledged();
+    log('Session approved: ' + activeSession.topic, 'success');
+
+    document.getElementById('wcStatus').className = 'status green';
+    document.getElementById('sessionInfo').style.display = 'block';
+    document.getElementById('sessionTopic').textContent = activeSession.topic.slice(0, 16) + '...';
+  } catch (e) {
+    log('Failed to approve session: ' + e.message, 'error');
+    await signClient.reject({ id, reason: { code: 5000, message: e.message } });
+  }
+}
+
+async function onSessionRequest({ id, topic, params }) {
+  const { request, chainId } = params;
+  log(`Request: ${request.method} (chain: ${chainId})`, 'info');
+
+  const entry = addRequestEntry(id, request.method, chainId);
+
+  try {
+    const result = await window.ethereum.request({ method: request.method, params: request.params });
+    await signClient.respond({ topic, response: { id, jsonrpc: '2.0', result } });
+    entry.className = 'request-entry success';
+    entry.textContent += ` → OK`;
+    log(`${request.method} signed successfully`, 'success');
+  } catch (e) {
+    await signClient.respond({ topic, response: { id, jsonrpc: '2.0', error: { code: e.code || 5000, message: e.message } } });
+    entry.className = 'request-entry error';
+    entry.textContent += ` → ${e.message}`;
+    log(`${request.method} failed: ${e.message}`, 'error');
+  }
+}
+
+function addRequestEntry(id, method, chainId) {
+  const container = document.getElementById('requests');
+  if (container.querySelector('em')) container.innerHTML = '';
+  const entry = document.createElement('div');
+  entry.className = 'request-entry pending';
+  entry.textContent = `[${new Date().toLocaleTimeString()}] ${method} (${chainId})`;
+  container.prepend(entry);
+  return entry;
+}
+
+function onSessionDelete({ topic }) {
+  log('Session deleted: ' + topic, 'info');
+  activeSession = null;
+  document.getElementById('wcStatus').className = 'status red';
+  document.getElementById('sessionInfo').style.display = 'none';
+}
+
+window.connectWallet = async () => {
+  if (!window.ethereum) {
+    log('No browser wallet found!', 'error');
+    return;
+  }
+  try {
+    const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
+    walletAddress = accounts[0];
+    const chainIdHex = await window.ethereum.request({ method: 'eth_chainId' });
+    walletChainId = parseInt(chainIdHex, 16);
+
+    document.getElementById('walletAddr').value = `${walletAddress} (chain ${walletChainId})`;
+    document.getElementById('walletStatus').className = 'status green';
+    log(`Wallet connected: ${walletAddress} on chain ${walletChainId}`, 'success');
+
+    window.ethereum.on('accountsChanged', (accounts) => {
+      walletAddress = accounts[0];
+      document.getElementById('walletAddr').value = `${walletAddress} (chain ${walletChainId})`;
+      log('Account changed: ' + walletAddress, 'info');
+    });
+    window.ethereum.on('chainChanged', (chainIdHex) => {
+      walletChainId = parseInt(chainIdHex, 16);
+      document.getElementById('walletAddr').value = `${walletAddress} (chain ${walletChainId})`;
+      log('Chain changed: ' + walletChainId, 'info');
+    });
+
+    await initSignClient();
+  } catch (e) {
+    log('Wallet connection failed: ' + e.message, 'error');
+  }
+};
+
+window.pair = async () => {
+  const uri = document.getElementById('wcUri').value.trim();
+  if (!uri) { log('Paste a WC URI first', 'error'); return; }
+  try {
+    log('Pairing...', 'info');
+    document.getElementById('wcStatus').className = 'status yellow';
+    await signClient.pair({ uri });
+    log('Pair request sent, waiting for session proposal...', 'info');
+  } catch (e) {
+    log('Pairing failed: ' + e.message, 'error');
+    document.getElementById('wcStatus').className = 'status red';
+  }
+};
+
+window.disconnectSession = async () => {
+  if (activeSession) {
+    await signClient.disconnect({ topic: activeSession.topic, reason: { code: 6000, message: 'User disconnected' } });
+    activeSession = null;
+    document.getElementById('wcStatus').className = 'status red';
+    document.getElementById('sessionInfo').style.display = 'none';
+    log('Session disconnected', 'info');
+  }
+};
+</script>
+</body>
+</html>
