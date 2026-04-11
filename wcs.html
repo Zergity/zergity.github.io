@@ -39,7 +39,7 @@
 </head>
 <body>
 
-<h1>WC Signer Bridge</h1>
+<h1>WalletConnect Signer</h1>
 
 <div class="section">
   <h2><span class="status red" id="walletStatus"></span>Browser Wallet</h2>
@@ -97,7 +97,7 @@ async function initSignClient() {
     signClient = await SignClient.init({
       projectId: 'f070914f4276a479f4b16d41b9f9f500',
       metadata: {
-        name: 'WC Signer Bridge',
+        name: 'WalletConnect Signer',
         description: 'Bridge signing requests to browser wallet',
         url: window.location.origin,
         icons: ['https://avatars.githubusercontent.com/u/110451741'],
