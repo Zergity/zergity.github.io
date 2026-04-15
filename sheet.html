@@ -1226,14 +1226,13 @@ function App() {
   // Auto-fit row height by measuring content
   const autoFitRow = useCallback((row) => {
     const el = document.createElement('div');
-    el.style.cssText = 'position:absolute;visibility:hidden;font-size:13px;font-family:monospace;padding:0 4px;white-space:pre-wrap;word-break:break-all;';
+    el.style.cssText = 'position:absolute;visibility:hidden;font-size:13px;font-family:monospace;padding:0 4px;white-space:nowrap;';
     document.body.appendChild(el);
     let maxHeight = 24;
     for (let c = 0; c < numCols; c++) {
       const v = getCellValue(row, c);
       if (v !== '' && v !== null && v !== undefined) {
-        el.style.width = colWidths[c] + 'px';
-        el.textContent = String(v);
+        el.textContent = formatValue(v);
         const h = el.offsetHeight + 4;
         if (h > maxHeight) maxHeight = h;
       }
@@ -1244,7 +1243,7 @@ function App() {
       next[row] = Math.ceil(Math.min(maxHeight, 400));
       return next;
     });
-  }, [numCols, getCellValue, colWidths]);
+  }, [numCols, getCellValue, formatValue]);
 
   autoFitColRef.current = autoFitCol;
   autoFitRowRef.current = autoFitRow;
