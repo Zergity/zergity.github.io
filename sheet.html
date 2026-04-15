@@ -652,7 +652,21 @@ function App() {
     try {
       const d = new Decimal(val);
       if (d.isZero()) return '0';
-      return d.toSignificantDigits(significantDigits).toFixed();
+      // Keep integer part intact; truncate decimals to significantDigits non-zero digits
+      const intPart = d.truncated();
+      const fracPart = d.minus(intPart).abs();
+      if (fracPart.isZero()) return intPart.toFixed();
+      const fracStr = fracPart.toFixed();
+      // Walk decimal digits, count non-zero ones up to significantDigits
+      const dot = fracStr.indexOf('.');
+      if (dot === -1) return intPart.toFixed();
+      let count = 0, cutPos = fracStr.length;
+      for (let i = dot + 1; i < fracStr.length; i++) {
+        if (fracStr[i] !== '0') count++;
+        if (count >= significantDigits) { cutPos = i + 1; break; }
+      }
+      const trimmedFrac = fracStr.slice(dot, cutPos);
+      return intPart.toFixed() + trimmedFrac;
     } catch(e) {
       return String(val);
     }
@@ -1316,10 +1330,10 @@ function App() {
     const max = vals.reduce((a, b) => a.gt(b) ? a : b);
     return {
       count: vals.length,
-      sum: sum.toSignificantDigits(significantDigits).toFixed(),
-      avg: avg.toSignificantDigits(significantDigits).toFixed(),
-      min: min.toSignificantDigits(significantDigits).toFixed(),
-      max: max.toSignificantDigits(significantDigits).toFixed(),
+      sum: formatValue(sum.toString()),
+      avg: formatValue(avg.toString()),
+      min: formatValue(min.toString()),
+      max: formatValue(max.toString()),
     };
   }, [getSelRange, getCellValue, significantDigits]);
 
@@ -1492,7 +1506,7 @@ function App() {
         <button onClick={handleLoad}>Open</button>
         <button onClick={handleExportCSV}>Export CSV</button>
         <div className="precision-control">
-          <label>Significant digits:</label>
+          <label>Decimal places:</label>
           <input
             type="number"
             min="1"
