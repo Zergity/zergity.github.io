@@ -655,20 +655,22 @@ function App() {
       const d = new Decimal(val);
       if (d.isZero()) return '0';
       // Keep integer part intact; truncate decimals to significantDigits non-zero digits
-      const intPart = d.truncated();
-      const fracPart = d.minus(intPart).abs();
-      if (fracPart.isZero()) return intPart.toFixed();
+      const sign = d.isNegative() ? '-' : '';
+      const abs = d.abs();
+      const intPart = abs.truncated();
+      const fracPart = abs.minus(intPart);
+      if (fracPart.isZero()) return sign + intPart.toFixed();
       const fracStr = fracPart.toFixed();
       // Walk decimal digits, count non-zero ones up to significantDigits
       const dot = fracStr.indexOf('.');
-      if (dot === -1) return intPart.toFixed();
+      if (dot === -1) return sign + intPart.toFixed();
       let count = 0, cutPos = fracStr.length;
       for (let i = dot + 1; i < fracStr.length; i++) {
         if (fracStr[i] !== '0') count++;
         if (count >= significantDigits) { cutPos = i + 1; break; }
       }
       const trimmedFrac = fracStr.slice(dot, cutPos);
-      return intPart.toFixed() + trimmedFrac;
+      return sign + intPart.toFixed() + trimmedFrac;
     } catch(e) {
       return String(val);
     }
