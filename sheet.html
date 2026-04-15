@@ -616,6 +616,8 @@ function App() {
   const gridRef = useRef(null);
   const editInputRef = useRef(null);
   const formulaInputRef = useRef(null);
+  const autoFitColRef = useRef(null);
+  const autoFitRowRef = useRef(null);
 
   // Compute cell value with cycle detection
   const computeCache = useRef({});
@@ -1106,6 +1108,7 @@ function App() {
       const next = {};
       for (const [id, val] of Object.entries(prev)) {
         const ref = parseCellRef(id);
+        if (!ref) { next[id] = val; continue; }
         if (ref.row > afterRow) {
           next[cellId(ref.row + 1, ref.col)] = val;
         } else {
@@ -1121,6 +1124,7 @@ function App() {
       const next = {};
       for (const [id, val] of Object.entries(prev)) {
         const ref = parseCellRef(id);
+        if (!ref) { next[id] = val; continue; }
         if (ref.row === row) continue;
         if (ref.row > row) {
           next[cellId(ref.row - 1, ref.col)] = val;
@@ -1137,6 +1141,7 @@ function App() {
       const next = {};
       for (const [id, val] of Object.entries(prev)) {
         const ref = parseCellRef(id);
+        if (!ref) { next[id] = val; continue; }
         if (ref.col > afterCol) {
           next[cellId(ref.row, ref.col + 1)] = val;
         } else {
@@ -1152,6 +1157,7 @@ function App() {
       const next = {};
       for (const [id, val] of Object.entries(prev)) {
         const ref = parseCellRef(id);
+        if (!ref) { next[id] = val; continue; }
         if (ref.col === col) continue;
         if (ref.col > col) {
           next[cellId(ref.row, ref.col - 1)] = val;
@@ -1245,6 +1251,9 @@ function App() {
     });
   }, [numCols, getCellValue, colWidths]);
 
+  autoFitColRef.current = autoFitCol;
+  autoFitRowRef.current = autoFitRow;
+
   // Row resize by dragging row header bottom edge
   const resizingRow = useRef(null);
   const handleRowResizeStart = useCallback((row, e) => {
@@ -1307,9 +1316,9 @@ function App() {
         usedRows.add(ref.row);
       }
     }
-    for (const c of usedCols) { if (!manualCols.has(c)) autoFitCol(c); }
-    for (const r of usedRows) { if (!manualRows.has(r)) autoFitRow(r); }
-  }, [cells, autoFitCol, autoFitRow, manualCols, manualRows]);
+    for (const c of usedCols) { if (!manualCols.has(c)) autoFitColRef.current(c); }
+    for (const r of usedRows) { if (!manualRows.has(r)) autoFitRowRef.current(r); }
+  }, [cells, manualCols, manualRows]);
 
   // Stats for status bar
   const stats = useMemo(() => {
@@ -1335,7 +1344,7 @@ function App() {
       min: formatValue(min.toString()),
       max: formatValue(max.toString()),
     };
-  }, [getSelRange, getCellValue, significantDigits]);
+  }, [getSelRange, getCellValue, formatValue]);
 
   // Focus grid on mount
   useEffect(() => { gridRef.current?.focus(); }, []);
