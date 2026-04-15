@@ -1208,13 +1208,8 @@ function App() {
     for (let r = 0; r < numRows; r++) {
       const v = getCellValue(r, col);
       if (v !== '' && v !== null && v !== undefined) {
-        const w = ctx.measureText(String(v)).width + 16; // padding
-        if (w > maxWidth) maxWidth = w;
-      }
-      // Also measure raw formula
-      const raw = getCellRaw(r, col);
-      if (raw && raw.startsWith('=')) {
-        const w = ctx.measureText(raw).width + 16;
+        const display = formatValue(v);
+        const w = ctx.measureText(display).width + 16; // padding
         if (w > maxWidth) maxWidth = w;
       }
     }
@@ -1226,7 +1221,7 @@ function App() {
       next[col] = Math.ceil(Math.min(maxWidth, 600));
       return next;
     });
-  }, [numRows, getCellValue, getCellRaw]);
+  }, [numRows, getCellValue, formatValue]);
 
   // Auto-fit row height by measuring content
   const autoFitRow = useCallback((row) => {
