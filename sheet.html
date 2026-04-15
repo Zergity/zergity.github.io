@@ -1,0 +1,1607 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Precision Sheet</title>
+<script src="https://cdn.jsdelivr.net/npm/decimal.js@10/decimal.min.js"></script>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<style>
+/* Light theme (default) */
+:root {
+  --bg-body: #f0f2f5;
+  --bg-surface: #fff;
+  --bg-surface-alt: #f8f8f8;
+  --bg-header: #f8f9fa;
+  --bg-header-hover: #e8eaed;
+  --bg-hover: #f0f0f0;
+  --bg-cell-edit: #fff;
+  --bg-context: #fff;
+  --border: #ddd;
+  --border-cell: #e0e0e0;
+  --border-input: #ccc;
+  --text-primary: #333;
+  --text-secondary: #666;
+  --text-tertiary: #999;
+  --text-error: #d93025;
+  --accent: #1a73e8;
+  --accent-bg: rgba(26,115,232,0.08);
+  --accent-shadow: rgba(26,115,232,0.15);
+  --accent-resize: rgba(26,115,232,0.3);
+  --shadow-context: rgba(0,0,0,0.15);
+  --scrollbar-thumb: #c1c1c1;
+  --scrollbar-track: #f1f1f1;
+}
+
+/* Dark theme — cold gray */
+[data-theme="dark"] {
+  --bg-body: #121518;
+  --bg-surface: #1b1f24;
+  --bg-surface-alt: #22272d;
+  --bg-header: #161a1f;
+  --bg-header-hover: #2a3038;
+  --bg-hover: #2a3038;
+  --bg-cell-edit: #22272d;
+  --bg-context: #1b1f24;
+  --border: #353c45;
+  --border-cell: #2c333b;
+  --border-input: #3a424c;
+  --text-primary: #d1d5db;
+  --text-secondary: #9ca3af;
+  --text-tertiary: #6b7280;
+  --text-error: #f87171;
+  --accent: #60a5fa;
+  --accent-bg: rgba(96,165,250,0.1);
+  --accent-shadow: rgba(96,165,250,0.2);
+  --accent-resize: rgba(96,165,250,0.3);
+  --shadow-context: rgba(0,0,0,0.5);
+  --scrollbar-thumb: #353c45;
+  --scrollbar-track: #161a1f;
+}
+
+/* Auto-detect OS preference */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg-body: #121518;
+    --bg-surface: #1b1f24;
+    --bg-surface-alt: #22272d;
+    --bg-header: #161a1f;
+    --bg-header-hover: #2a3038;
+    --bg-hover: #2a3038;
+    --bg-cell-edit: #22272d;
+    --bg-context: #1b1f24;
+    --border: #353c45;
+    --border-cell: #2c333b;
+    --border-input: #3a424c;
+    --text-primary: #d1d5db;
+    --text-secondary: #9ca3af;
+    --text-tertiary: #6b7280;
+    --text-error: #f87171;
+    --accent: #60a5fa;
+    --accent-bg: rgba(96,165,250,0.1);
+    --accent-shadow: rgba(96,165,250,0.2);
+    --accent-resize: rgba(96,165,250,0.3);
+    --shadow-context: rgba(0,0,0,0.5);
+    --scrollbar-thumb: #353c45;
+    --scrollbar-track: #161a1f;
+  }
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: var(--bg-body); color: var(--text-primary); overflow: hidden; height: 100vh; }
+
+.app { display: flex; flex-direction: column; height: 100vh; }
+
+/* Scrollbar styling */
+.grid-container::-webkit-scrollbar { width: 10px; height: 10px; }
+.grid-container::-webkit-scrollbar-track { background: var(--scrollbar-track); }
+.grid-container::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb); border-radius: 5px; }
+
+/* Toolbar */
+.toolbar { display: flex; align-items: center; gap: 8px; padding: 6px 12px; background: var(--bg-surface); border-bottom: 1px solid var(--border); flex-shrink: 0; }
+.toolbar .title { font-weight: 600; font-size: 15px; color: var(--text-primary); margin-right: 12px; }
+.toolbar .precision-control { display: flex; align-items: center; gap: 4px; font-size: 12px; color: var(--text-secondary); }
+.toolbar .precision-control input { width: 60px; padding: 2px 6px; border: 1px solid var(--border-input); border-radius: 3px; font-size: 12px; background: var(--bg-surface-alt); color: var(--text-primary); }
+.toolbar button { padding: 4px 10px; border: 1px solid var(--border-input); border-radius: 3px; background: var(--bg-surface); color: var(--text-primary); cursor: pointer; font-size: 12px; }
+.toolbar button:hover { background: var(--bg-hover); }
+.theme-toggle { font-size: 16px !important; padding: 3px 8px !important; line-height: 1; }
+
+/* Formula bar */
+.formula-bar { display: flex; align-items: center; padding: 4px 8px; background: var(--bg-surface); border-bottom: 1px solid var(--border); flex-shrink: 0; }
+.cell-ref { width: 70px; padding: 3px 6px; border: 1px solid var(--border-input); border-radius: 3px; font-size: 13px; font-family: monospace; text-align: center; background: var(--bg-surface-alt); color: var(--text-primary); margin-right: 8px; }
+.formula-icon { color: var(--text-tertiary); margin-right: 6px; font-style: italic; font-weight: bold; font-size: 14px; }
+.formula-input { flex: 1; padding: 3px 6px; border: 1px solid var(--border-input); border-radius: 3px; font-size: 13px; font-family: monospace; outline: none; background: var(--bg-surface); color: var(--text-primary); }
+.formula-input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-shadow); }
+
+/* Grid */
+.grid-container { flex: 1; overflow: auto; position: relative; }
+.grid { border-collapse: collapse; table-layout: fixed; }
+.grid th, .grid td { border: 1px solid var(--border-cell); padding: 0; min-width: 100px; font-size: 13px; color: var(--text-primary); }
+.grid th { background: var(--bg-header); color: var(--text-secondary); font-weight: 500; font-size: 12px; position: sticky; z-index: 1; user-select: none; }
+.grid thead th { top: 0; z-index: 2; }
+.grid th.row-header { position: sticky; left: 0; z-index: 3; width: 50px; min-width: 50px; text-align: center; position: relative; }
+.row-resize { position: absolute; left: 0; right: 0; bottom: -3px; height: 6px; cursor: row-resize; z-index: 5; }
+.row-resize:hover { background: var(--accent-resize); }
+.grid thead th.corner { z-index: 4; left: 0; width: 50px; min-width: 50px; }
+.grid thead th.col-header { cursor: pointer; }
+.grid thead th.col-header:hover { background: var(--bg-header-hover); }
+.grid th.row-header:hover { background: var(--bg-header-hover); cursor: pointer; }
+
+.grid td { padding: 0 4px; position: relative; cursor: cell; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; word-break: break-all; background: var(--bg-surface); vertical-align: top; }
+.grid td.selected { outline: 2px solid var(--accent); outline-offset: -1px; z-index: 1; }
+.grid td.in-range { background: var(--accent-bg); }
+.grid td.editing { padding: 0; outline: 2px solid var(--accent); }
+.grid td.editing input { width: 100%; height: 100%; border: none; outline: none; padding: 0 4px; font-size: 13px; font-family: monospace; background: var(--bg-cell-edit); color: var(--text-primary); }
+.grid td.error { color: var(--text-error); font-size: 11px; }
+.grid td.number { text-align: right; font-family: monospace; }
+
+/* Column resize handle */
+.col-resize { position: absolute; right: -3px; top: 0; bottom: 0; width: 6px; cursor: col-resize; z-index: 5; }
+.col-resize:hover { background: var(--accent-resize); }
+
+/* Status bar */
+.status-bar { display: flex; align-items: center; justify-content: space-between; padding: 4px 12px; background: var(--bg-surface); border-top: 1px solid var(--border); font-size: 12px; color: var(--text-secondary); flex-shrink: 0; }
+.status-bar .stats { display: flex; gap: 16px; }
+.status-bar .stat { font-family: monospace; }
+.status-bar .stat label { color: var(--text-tertiary); margin-right: 4px; }
+
+/* Context menu */
+.context-menu { position: fixed; background: var(--bg-context); border: 1px solid var(--border); border-radius: 4px; box-shadow: 0 2px 8px var(--shadow-context); z-index: 100; min-width: 160px; padding: 4px 0; }
+.context-menu-item { padding: 6px 16px; font-size: 13px; cursor: pointer; color: var(--text-primary); }
+.context-menu-item:hover { background: var(--bg-hover); }
+.context-menu-sep { border-top: 1px solid var(--border); margin: 4px 0; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useRef, useEffect, useCallback, useMemo } = React;
+
+// Configure Decimal.js for high precision
+Decimal.set({ precision: 50, rounding: Decimal.ROUND_HALF_UP });
+
+const DEFAULT_ROWS = 100;
+const DEFAULT_COLS = 26;
+
+// Column index to letter(s)
+function colToLetter(c) {
+  let s = '';
+  c++;
+  while (c > 0) { c--; s = String.fromCharCode(65 + (c % 26)) + s; c = Math.floor(c / 26); }
+  return s;
+}
+
+// Letter(s) to column index
+function letterToCol(s) {
+  s = s.toUpperCase();
+  let c = 0;
+  for (let i = 0; i < s.length; i++) { c = c * 26 + (s.charCodeAt(i) - 64); }
+  return c - 1;
+}
+
+// Parse cell reference like "A1" -> { col, row }
+function parseCellRef(ref) {
+  const m = ref.match(/^([A-Za-z]+)(\d+)$/);
+  if (!m) return null;
+  return { col: letterToCol(m[1]), row: parseInt(m[2]) - 1 };
+}
+
+function cellId(r, c) { return colToLetter(c) + (r + 1); }
+
+// Parse a range like "A1:B5" into list of {row, col}
+function parseRange(rangeStr) {
+  const parts = rangeStr.split(':');
+  if (parts.length === 1) {
+    const ref = parseCellRef(parts[0]);
+    return ref ? [ref] : [];
+  }
+  const start = parseCellRef(parts[0]);
+  const end = parseCellRef(parts[1]);
+  if (!start || !end) return [];
+  const cells = [];
+  const r1 = Math.min(start.row, end.row), r2 = Math.max(start.row, end.row);
+  const c1 = Math.min(start.col, end.col), c2 = Math.max(start.col, end.col);
+  for (let r = r1; r <= r2; r++)
+    for (let c = c1; c <= c2; c++)
+      cells.push({ row: r, col: c });
+  return cells;
+}
+
+// Tokenizer for formulas
+function tokenize(expr) {
+  const tokens = [];
+  let i = 0;
+  while (i < expr.length) {
+    if (/\s/.test(expr[i])) { i++; continue; }
+    // Number (including decimal)
+    if (/[\d.]/.test(expr[i])) {
+      let num = '';
+      while (i < expr.length && /[\d.eE\-+]/.test(expr[i])) {
+        if ((expr[i] === '-' || expr[i] === '+') && num.length > 0 && !/[eE]/.test(num[num.length-1])) break;
+        num += expr[i++];
+      }
+      tokens.push({ type: 'number', value: num });
+      continue;
+    }
+    // String literal
+    if (expr[i] === '"') {
+      let s = ''; i++;
+      while (i < expr.length && expr[i] !== '"') { s += expr[i++]; }
+      i++; // closing quote
+      tokens.push({ type: 'string', value: s });
+      continue;
+    }
+    // Cell ref or range or function name
+    if (/[A-Za-z_]/.test(expr[i])) {
+      let name = '';
+      while (i < expr.length && /[A-Za-z0-9_]/.test(expr[i])) { name += expr[i++]; }
+      // Check for range
+      if (i < expr.length && expr[i] === ':') {
+        i++; // skip ':'
+        let name2 = '';
+        while (i < expr.length && /[A-Za-z0-9_]/.test(expr[i])) { name2 += expr[i++]; }
+        tokens.push({ type: 'range', value: name + ':' + name2 });
+      } else if (i < expr.length && expr[i] === '(') {
+        tokens.push({ type: 'function', value: name.toUpperCase() });
+      } else {
+        tokens.push({ type: 'cell', value: name.toUpperCase() });
+      }
+      continue;
+    }
+    // Operators
+    if ('+-*/%^'.includes(expr[i])) {
+      tokens.push({ type: 'op', value: expr[i++] });
+      continue;
+    }
+    if (expr[i] === '(' || expr[i] === ')') {
+      tokens.push({ type: expr[i] === '(' ? 'lparen' : 'rparen', value: expr[i++] });
+      continue;
+    }
+    if (expr[i] === ',') {
+      tokens.push({ type: 'comma', value: expr[i++] });
+      continue;
+    }
+    // Comparison operators
+    if ('<>=!'.includes(expr[i])) {
+      let op = expr[i++];
+      if (i < expr.length && expr[i] === '=') op += expr[i++];
+      else if (op === '!' && i < expr.length && expr[i] === '=') op += expr[i++];
+      tokens.push({ type: 'compare', value: op });
+      continue;
+    }
+    // Unary minus handled during parsing
+    i++; // skip unknown
+  }
+  return tokens;
+}
+
+// Recursive descent parser + evaluator
+function evaluate(formula, getCellValue, visited) {
+  if (!formula.startsWith('=')) return formula;
+  const expr = formula.slice(1);
+  const tokens = tokenize(expr);
+  let pos = 0;
+
+  function peek() { return pos < tokens.length ? tokens[pos] : null; }
+  function consume() { return tokens[pos++]; }
+  function expect(type) {
+    const t = consume();
+    if (!t || t.type !== type) throw new Error('Expected ' + type);
+    return t;
+  }
+
+  // Gather numeric values from a range for aggregate functions
+  function resolveArgs() {
+    const args = [];
+    while (peek() && peek().type !== 'rparen') {
+      if (peek().type === 'comma') { consume(); continue; }
+      if (peek().type === 'range') {
+        const cells = parseRange(consume().value);
+        for (const c of cells) {
+          const v = getCellValue(c.row, c.col, new Set(visited));
+          if (v !== '' && v !== null && v !== undefined) {
+            if (typeof v === 'string' && v.startsWith('#')) throw new Error(v);
+            try { args.push(new Decimal(v)); } catch(e) {}
+          }
+        }
+      } else {
+        const val = parseComparison();
+        if (val instanceof Decimal) args.push(val);
+        else if (typeof val === 'string' && val !== '') {
+          try { args.push(new Decimal(val)); } catch(e) {}
+        }
+      }
+    }
+    return args;
+  }
+
+  function parseComparison() {
+    let left = parseExpr();
+    while (peek() && peek().type === 'compare') {
+      const op = consume().value;
+      const right = parseExpr();
+      const l = left instanceof Decimal ? left : new Decimal(left || 0);
+      const r = right instanceof Decimal ? right : new Decimal(right || 0);
+      switch(op) {
+        case '=': case '==': left = l.eq(r) ? new Decimal(1) : new Decimal(0); break;
+        case '!=': case '<>': left = !l.eq(r) ? new Decimal(1) : new Decimal(0); break;
+        case '<': left = l.lt(r) ? new Decimal(1) : new Decimal(0); break;
+        case '>': left = l.gt(r) ? new Decimal(1) : new Decimal(0); break;
+        case '<=': left = l.lte(r) ? new Decimal(1) : new Decimal(0); break;
+        case '>=': left = l.gte(r) ? new Decimal(1) : new Decimal(0); break;
+      }
+    }
+    return left;
+  }
+
+  function parseExpr() {
+    let left = parseTerm();
+    while (peek() && peek().type === 'op' && (peek().value === '+' || peek().value === '-')) {
+      const op = consume().value;
+      const right = parseTerm();
+      const l = left instanceof Decimal ? left : new Decimal(left || 0);
+      const r = right instanceof Decimal ? right : new Decimal(right || 0);
+      left = op === '+' ? l.plus(r) : l.minus(r);
+    }
+    return left;
+  }
+
+  function parseTerm() {
+    let left = parsePower();
+    while (peek() && peek().type === 'op' && ('*/%'.includes(peek().value))) {
+      const op = consume().value;
+      const right = parsePower();
+      const l = left instanceof Decimal ? left : new Decimal(left || 0);
+      const r = right instanceof Decimal ? right : new Decimal(right || 0);
+      if (op === '*') left = l.times(r);
+      else if (op === '/') { if (r.isZero()) throw new Error('#DIV/0!'); left = l.div(r); }
+      else left = l.mod(r);
+    }
+    return left;
+  }
+
+  function parsePower() {
+    let base = parseUnary();
+    if (peek() && peek().type === 'op' && peek().value === '^') {
+      consume();
+      const exp = parseUnary();
+      const b = base instanceof Decimal ? base : new Decimal(base || 0);
+      const e = exp instanceof Decimal ? exp : new Decimal(exp || 0);
+      base = b.pow(e);
+    }
+    return base;
+  }
+
+  function parseUnary() {
+    if (peek() && peek().type === 'op' && peek().value === '-') {
+      consume();
+      const val = parseAtom();
+      const v = val instanceof Decimal ? val : new Decimal(val || 0);
+      return v.neg();
+    }
+    if (peek() && peek().type === 'op' && peek().value === '+') {
+      consume();
+      return parseAtom();
+    }
+    return parseAtom();
+  }
+
+  function parseAtom() {
+    const t = peek();
+    if (!t) throw new Error('#ERROR!');
+
+    if (t.type === 'number') {
+      consume();
+      return new Decimal(t.value);
+    }
+
+    if (t.type === 'string') {
+      consume();
+      return t.value;
+    }
+
+    if (t.type === 'cell') {
+      consume();
+      const ref = parseCellRef(t.value);
+      if (!ref) throw new Error('#REF! ' + t.value);
+      const v = getCellValue(ref.row, ref.col, new Set(visited));
+      if (v === '' || v === null || v === undefined) return new Decimal(0);
+      if (typeof v === 'string' && v.startsWith('#')) throw new Error(v);
+      try { return new Decimal(v); } catch(e) { return v; }
+    }
+
+    if (t.type === 'function') {
+      const fn = consume().value;
+      expect('lparen');
+      let result;
+
+      switch(fn) {
+        case 'SUM': {
+          const args = resolveArgs();
+          result = args.reduce((a, b) => a.plus(b), new Decimal(0));
+          break;
+        }
+        case 'AVERAGE': case 'AVG': {
+          const args = resolveArgs();
+          if (args.length === 0) throw new Error('#DIV/0!');
+          result = args.reduce((a, b) => a.plus(b), new Decimal(0)).div(args.length);
+          break;
+        }
+        case 'MIN': {
+          const args = resolveArgs();
+          if (args.length === 0) result = new Decimal(0);
+          else result = args.reduce((a, b) => a.lt(b) ? a : b);
+          break;
+        }
+        case 'MAX': {
+          const args = resolveArgs();
+          if (args.length === 0) result = new Decimal(0);
+          else result = args.reduce((a, b) => a.gt(b) ? a : b);
+          break;
+        }
+        case 'COUNT': {
+          const args = resolveArgs();
+          result = new Decimal(args.length);
+          break;
+        }
+        case 'ABS': {
+          const args = resolveArgs();
+          result = args.length > 0 ? args[0].abs() : new Decimal(0);
+          break;
+        }
+        case 'ROUND': {
+          const args = resolveArgs();
+          const val = args[0] || new Decimal(0);
+          const places = args[1] ? args[1].toNumber() : 0;
+          result = val.toDecimalPlaces(places);
+          break;
+        }
+        case 'SQRT': {
+          const args = resolveArgs();
+          const val = args[0] || new Decimal(0);
+          if (val.isNegative()) throw new Error('#NUM!');
+          result = val.sqrt();
+          break;
+        }
+        case 'POWER': case 'POW': {
+          const args = resolveArgs();
+          result = (args[0] || new Decimal(0)).pow(args[1] || new Decimal(0));
+          break;
+        }
+        case 'LN': {
+          const args = resolveArgs();
+          result = (args[0] || new Decimal(0)).ln();
+          break;
+        }
+        case 'LOG': case 'LOG10': {
+          const args = resolveArgs();
+          result = (args[0] || new Decimal(0)).log();
+          break;
+        }
+        case 'EXP': {
+          const args = resolveArgs();
+          result = (args[0] || new Decimal(0)).exp();
+          break;
+        }
+        case 'PI': {
+          resolveArgs(); // consume empty args
+          result = Decimal.acos(-1);
+          break;
+        }
+        case 'IF': {
+          // IF needs special handling — don't pre-resolve
+          const cond = parseComparison();
+          expect('comma');
+          const trueVal = parseComparison();
+          let falseVal = new Decimal(0);
+          if (peek() && peek().type === 'comma') { consume(); falseVal = parseComparison(); }
+          const condNum = cond instanceof Decimal ? cond : new Decimal(cond || 0);
+          result = condNum.isZero() ? falseVal : trueVal;
+          break;
+        }
+        case 'FLOOR': {
+          const args = resolveArgs();
+          result = (args[0] || new Decimal(0)).floor();
+          break;
+        }
+        case 'CEIL': case 'CEILING': {
+          const args = resolveArgs();
+          result = (args[0] || new Decimal(0)).ceil();
+          break;
+        }
+        case 'TRUNCATE': case 'TRUNC': case 'INT': {
+          const args = resolveArgs();
+          result = (args[0] || new Decimal(0)).truncated();
+          break;
+        }
+        case 'MOD': {
+          const args = resolveArgs();
+          if (!args[1] || args[1].isZero()) throw new Error('#DIV/0!');
+          result = (args[0] || new Decimal(0)).mod(args[1]);
+          break;
+        }
+        case 'MEDIAN': {
+          const args = resolveArgs();
+          if (args.length === 0) throw new Error('#NUM!');
+          args.sort((a, b) => a.cmp(b));
+          const mid = Math.floor(args.length / 2);
+          result = args.length % 2 !== 0 ? args[mid] : args[mid-1].plus(args[mid]).div(2);
+          break;
+        }
+        case 'STDEV': {
+          const args = resolveArgs();
+          if (args.length < 2) throw new Error('#NUM!');
+          const mean = args.reduce((a,b) => a.plus(b), new Decimal(0)).div(args.length);
+          const variance = args.reduce((a,b) => a.plus(b.minus(mean).pow(2)), new Decimal(0)).div(args.length - 1);
+          result = variance.sqrt();
+          break;
+        }
+        default:
+          throw new Error('#NAME? ' + fn);
+      }
+      expect('rparen');
+      return result;
+    }
+
+    if (t.type === 'lparen') {
+      consume();
+      const val = parseComparison();
+      expect('rparen');
+      return val;
+    }
+
+    throw new Error('#ERROR!');
+  }
+
+  const result = parseComparison();
+  if (result instanceof Decimal) return result.toString();
+  return result;
+}
+
+// Main App
+function App() {
+  const [cells, setCells] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('sheet_cells')) || {}; } catch(e) { return {}; }
+  });
+  const [selection, setSelection] = useState({ row: 0, col: 0 });
+  const [editingCell, setEditingCell] = useState(null);
+  const [editValue, setEditValue] = useState('');
+  const [formulaBarValue, setFormulaBarValue] = useState('');
+  const [formulaBarFocused, setFormulaBarFocused] = useState(false);
+  const [colWidths, setColWidths] = useState(() => Array(DEFAULT_COLS).fill(100));
+  const [rowHeights, setRowHeights] = useState(() => Array(DEFAULT_ROWS).fill(24));
+  const [manualCols, setManualCols] = useState(() => new Set()); // cols with manual width
+  const [manualRows, setManualRows] = useState(() => new Set()); // rows with manual height
+  const [numRows] = useState(DEFAULT_ROWS);
+  const [numCols] = useState(DEFAULT_COLS);
+  const [significantDigits, setSignificantDigits] = useState(6);
+  const [theme, setTheme] = useState(() => {
+    // 'auto' means follow OS; 'light'/'dark' means user override
+    return 'auto';
+  });
+
+  // Apply theme to <html> element
+  useEffect(() => {
+    const root = document.documentElement;
+    if (theme === 'auto') {
+      root.removeAttribute('data-theme');
+    } else {
+      root.setAttribute('data-theme', theme);
+    }
+  }, [theme]);
+
+  const toggleTheme = useCallback(() => {
+    setTheme(prev => {
+      if (prev === 'auto') {
+        // Detect current effective theme and switch to opposite
+        const isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+        return isDark ? 'light' : 'dark';
+      }
+      if (prev === 'dark') return 'light';
+      return 'dark';
+    });
+  }, []);
+
+  const effectiveTheme = useMemo(() => {
+    if (theme !== 'auto') return theme;
+    return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  }, [theme]);
+  const [contextMenu, setContextMenu] = useState(null);
+  const [selRange, setSelRange] = useState(null); // { startRow, startCol, endRow, endCol }
+  const [isDragging, setIsDragging] = useState(false);
+  const [copyData, setCopyData] = useState(null);
+
+  const gridRef = useRef(null);
+  const editInputRef = useRef(null);
+  const formulaInputRef = useRef(null);
+
+  // Compute cell value with cycle detection
+  const computeCache = useRef({});
+  const computeGeneration = useRef(0);
+
+  const getCellRaw = useCallback((r, c) => {
+    const id = cellId(r, c);
+    return cells[id]?.raw ?? '';
+  }, [cells]);
+
+  const getCellValue = useCallback((r, c, visited = new Set()) => {
+    const id = cellId(r, c);
+    if (visited.has(id)) return '#CIRC!';
+    visited.add(id);
+
+    const raw = cells[id]?.raw ?? '';
+    if (raw === '') return '';
+    if (!raw.startsWith('=')) {
+      // Try to parse as number
+      try { new Decimal(raw); return raw; } catch(e) { return raw; }
+    }
+
+    try {
+      return evaluate(raw, getCellValue, new Set(visited));
+    } catch (e) {
+      return e.message;
+    }
+  }, [cells]);
+
+  // Format display value
+  const formatValue = useCallback((val) => {
+    if (val === '' || val === null || val === undefined) return '';
+    if (typeof val === 'string' && val.startsWith('#')) return val; // error
+    try {
+      const d = new Decimal(val);
+      if (d.isZero()) return '0';
+      return d.toSignificantDigits(significantDigits).toFixed();
+    } catch(e) {
+      return String(val);
+    }
+  }, [significantDigits]);
+
+  const isNumeric = useCallback((val) => {
+    if (val === '' || val === null || val === undefined) return false;
+    try { new Decimal(val); return true; } catch(e) { return false; }
+  }, []);
+
+  // Selection range helpers
+  const getSelRange = useCallback(() => {
+    if (!selRange) return { r1: selection.row, c1: selection.col, r2: selection.row, c2: selection.col };
+    const r1 = Math.min(selRange.startRow, selRange.endRow);
+    const r2 = Math.max(selRange.startRow, selRange.endRow);
+    const c1 = Math.min(selRange.startCol, selRange.endCol);
+    const c2 = Math.max(selRange.startCol, selRange.endCol);
+    return { r1, c1, r2, c2 };
+  }, [selRange, selection]);
+
+  const isInRange = useCallback((r, c) => {
+    const { r1, c1, r2, c2 } = getSelRange();
+    return r >= r1 && r <= r2 && c >= c1 && c <= c2;
+  }, [getSelRange]);
+
+  // Commit cell edit
+  const commitEdit = useCallback((value) => {
+    if (editingCell) {
+      const id = cellId(editingCell.row, editingCell.col);
+      setCells(prev => {
+        if (value === '') {
+          const next = { ...prev };
+          delete next[id];
+          return next;
+        }
+        return { ...prev, [id]: { raw: value } };
+      });
+      setEditingCell(null);
+    }
+  }, [editingCell]);
+
+  // Start editing a cell
+  const startEdit = useCallback((r, c, initialValue) => {
+    const id = cellId(r, c);
+    const raw = cells[id]?.raw ?? '';
+    setEditingCell({ row: r, col: c });
+    setEditValue(initialValue !== undefined ? initialValue : raw);
+    setFormulaBarValue(initialValue !== undefined ? initialValue : raw);
+  }, [cells]);
+
+  // Strip Google Sheets custom precision wrapper functions like
+  // PRECISION_ADD("15388944453417966044","0") → 15388944453417966044
+  // Works for any PRECISION_*("first_arg", ...) pattern.
+  const stripPrecisionWrappers = useCallback((raw) => {
+    return raw.replace(/PRECISION_\w+\(\s*"([^"]*)"\s*(?:,\s*"[^"]*"\s*)*\)/gi, '$1');
+  }, []);
+
+  // Parse Google Sheets HTML clipboard into cell data
+  // Google Sheets stores formulas in data-sheets-formula attributes on <td> elements.
+  // The formula uses R[row]C[col] notation which we convert to A1 notation.
+  // Single cells are wrapped in <span data-sheets-root="1"> instead of a table.
+  const parseGoogleSheetsHtml = useCallback((html) => {
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(html, 'text/html');
+
+    // Check for Google Sheets origin
+    const isGoogleSheets = html.includes('data-sheets-') || html.includes('google-sheets-html-origin');
+    if (!isGoogleSheets) return null;
+
+    const result = [];
+
+    // Try table format first (multi-cell copy)
+    const table = doc.querySelector('table');
+    if (table) {
+      const trs = table.querySelectorAll('tr');
+      // Track occupied cells from rowspan/colspan
+      const occupied = {}; // "r,c" -> true
+      trs.forEach((tr, ri) => {
+        const tds = tr.querySelectorAll('td, th');
+        let ci = 0;
+        tds.forEach((td) => {
+          // Skip cells occupied by previous rowspan/colspan
+          while (occupied[ri + ',' + ci]) ci++;
+          const colspan = parseInt(td.getAttribute('colspan')) || 1;
+          const rowspan = parseInt(td.getAttribute('rowspan')) || 1;
+          // Mark spanned cells as occupied
+          for (let dr = 0; dr < rowspan; dr++) {
+            for (let dc = 0; dc < colspan; dc++) {
+              if (dr > 0 || dc > 0) {
+                occupied[(ri + dr) + ',' + (ci + dc)] = true;
+              }
+            }
+          }
+          const formula = td.getAttribute('data-sheets-formula');
+          let raw;
+          if (formula) {
+            raw = stripPrecisionWrappers(convertGoogleFormula(formula, ri, ci));
+          } else {
+            raw = stripPrecisionWrappers(td.textContent.trim());
+          }
+          if (raw) {
+            result.push({ r: ri, c: ci, raw });
+          }
+          ci += colspan;
+        });
+      });
+      return result.length > 0 ? result : null;
+    }
+
+    // Single cell: <span data-sheets-root="1">value</span>
+    const span = doc.querySelector('[data-sheets-root]');
+    if (span) {
+      const formula = span.getAttribute('data-sheets-formula');
+      const raw = stripPrecisionWrappers(formula ? convertGoogleFormula(formula, 0, 0) : span.textContent.trim());
+      if (raw) return [{ r: 0, c: 0, raw }];
+    }
+
+    return null;
+  }, []);
+
+  // Convert Google Sheets R1C1-style formula to A1 notation
+  // Google uses: =R[0]C[-1] (relative) or =R1C1 (absolute)
+  // within data-sheets-formula attributes
+  const convertGoogleFormula = useCallback((formula, baseRow, baseCol) => {
+    // Google Sheets formulas in data-sheets-formula start with '='
+    // They use R[n]C[n] for relative refs and RnCn for absolute refs
+    return formula.replace(/R(\[?-?\d*\]?)C(\[?-?\d*\]?)/g, (match, rPart, cPart) => {
+      let row, col;
+
+      // Parse row
+      if (rPart.startsWith('[') && rPart.endsWith(']')) {
+        // Relative row reference
+        const offset = parseInt(rPart.slice(1, -1)) || 0;
+        row = baseRow + offset;
+      } else if (rPart === '') {
+        row = baseRow;
+      } else {
+        // Absolute row reference (1-based in Google)
+        row = parseInt(rPart) - 1;
+      }
+
+      // Parse col
+      if (cPart.startsWith('[') && cPart.endsWith(']')) {
+        // Relative col reference
+        const offset = parseInt(cPart.slice(1, -1)) || 0;
+        col = baseCol + offset;
+      } else if (cPart === '') {
+        col = baseCol;
+      } else {
+        // Absolute col reference (1-based in Google)
+        col = parseInt(cPart) - 1;
+      }
+
+      if (row < 0 || col < 0) return '#REF!';
+      return colToLetter(col) + (row + 1);
+    });
+  }, []);
+
+  // Handle paste event (from both keyboard and browser paste)
+  const handlePaste = useCallback((e) => {
+    // Don't intercept paste when typing in formula bar
+    const active = document.activeElement;
+    if (active && active.classList.contains('formula-input')) return;
+    // Don't intercept paste when editing a single cell inline
+    if (active && active.tagName === 'INPUT') {
+      const td = active.closest('td');
+      if (td && td.classList.contains('editing')) return;
+    }
+
+    e.preventDefault();
+
+    // Internal copy takes priority
+    if (copyData) {
+      setCells(prev => {
+        const next = { ...prev };
+        for (const row of copyData.data) {
+          for (const cell of row) {
+            const id = cellId(selection.row + cell.r, selection.col + cell.c);
+            if (cell.raw) next[id] = { raw: cell.raw };
+            else delete next[id];
+          }
+        }
+        return next;
+      });
+      return;
+    }
+
+    const clipboardData = e.clipboardData;
+    if (!clipboardData) return;
+
+    const html = clipboardData.getData('text/html');
+    const text = clipboardData.getData('text/plain');
+
+    // Try HTML first (Google Sheets multi-cell copy)
+    if (html) {
+      const parsed = parseGoogleSheetsHtml(html);
+      if (parsed) {
+        setCells(prev => {
+          const next = { ...prev };
+          for (const cell of parsed) {
+            const id = cellId(selection.row + cell.r, selection.col + cell.c);
+            if (cell.raw) next[id] = { raw: cell.raw };
+            else delete next[id];
+          }
+          return next;
+        });
+        return;
+      }
+    }
+
+    // Fall back to plain text (tab-separated)
+    if (text) {
+      const lines = text.split('\n').filter(l => l.length > 0);
+      setCells(prev => {
+        const next = { ...prev };
+        lines.forEach((line, ri) => {
+          const cols = line.split('\t');
+          cols.forEach((v, ci) => {
+            const val = stripPrecisionWrappers(v);
+            const id = cellId(selection.row + ri, selection.col + ci);
+            if (val) next[id] = { raw: val };
+            else delete next[id];
+          });
+        });
+        return next;
+      });
+    }
+  }, [parseGoogleSheetsHtml, selection, copyData]);
+
+  // Attach paste event listener to document so it works regardless of focus target
+  useEffect(() => {
+    document.addEventListener('paste', handlePaste);
+    return () => document.removeEventListener('paste', handlePaste);
+  }, [handlePaste]);
+
+  // Handle formula bar changes
+  const handleFormulaBarChange = useCallback((e) => {
+    setFormulaBarValue(e.target.value);
+    if (editingCell) {
+      setEditValue(e.target.value);
+    }
+  }, [editingCell]);
+
+  const handleFormulaBarFocus = useCallback(() => {
+    setFormulaBarFocused(true);
+    if (!editingCell) {
+      startEdit(selection.row, selection.col);
+    }
+  }, [editingCell, selection, startEdit]);
+
+  const handleFormulaBarKeyDown = useCallback((e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      commitEdit(formulaBarValue);
+      setFormulaBarFocused(false);
+      setSelection(prev => ({ row: prev.row + 1, col: prev.col }));
+      gridRef.current?.focus();
+    } else if (e.key === 'Escape') {
+      setEditingCell(null);
+      setFormulaBarFocused(false);
+      gridRef.current?.focus();
+    } else if (e.key === 'Tab') {
+      e.preventDefault();
+      commitEdit(formulaBarValue);
+      setFormulaBarFocused(false);
+      setSelection(prev => ({ row: prev.row, col: Math.min(prev.col + 1, numCols - 1) }));
+      gridRef.current?.focus();
+    }
+  }, [commitEdit, formulaBarValue, numCols]);
+
+  // Update formula bar when selection changes
+  useEffect(() => {
+    if (!editingCell && !formulaBarFocused) {
+      const id = cellId(selection.row, selection.col);
+      setFormulaBarValue(cells[id]?.raw ?? '');
+    }
+  }, [selection, cells, editingCell, formulaBarFocused]);
+
+  // Keyboard handler for grid
+  const handleGridKeyDown = useCallback((e) => {
+    if (editingCell && !formulaBarFocused) {
+      // Editing in cell
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        commitEdit(editValue);
+        setSelection(prev => ({ row: Math.min(prev.row + 1, numRows - 1), col: prev.col }));
+      } else if (e.key === 'Tab') {
+        e.preventDefault();
+        commitEdit(editValue);
+        const dir = e.shiftKey ? -1 : 1;
+        setSelection(prev => ({ row: prev.row, col: Math.max(0, Math.min(prev.col + dir, numCols - 1)) }));
+      } else if (e.key === 'Escape') {
+        setEditingCell(null);
+      }
+      return;
+    }
+
+    // Navigation
+    const shift = e.shiftKey;
+    switch (e.key) {
+      case 'ArrowUp':
+        e.preventDefault();
+        setSelection(prev => ({ ...prev, row: Math.max(0, prev.row - 1) }));
+        setSelRange(null);
+        break;
+      case 'ArrowDown':
+        e.preventDefault();
+        setSelection(prev => ({ ...prev, row: Math.min(numRows - 1, prev.row + 1) }));
+        setSelRange(null);
+        break;
+      case 'ArrowLeft':
+        e.preventDefault();
+        setSelection(prev => ({ ...prev, col: Math.max(0, prev.col - 1) }));
+        setSelRange(null);
+        break;
+      case 'ArrowRight':
+        e.preventDefault();
+        setSelection(prev => ({ ...prev, col: Math.min(numCols - 1, prev.col + 1) }));
+        setSelRange(null);
+        break;
+      case 'Tab':
+        e.preventDefault();
+        if (e.shiftKey) {
+          setSelection(prev => ({ ...prev, col: Math.max(0, prev.col - 1) }));
+        } else {
+          setSelection(prev => ({ ...prev, col: Math.min(numCols - 1, prev.col + 1) }));
+        }
+        setSelRange(null);
+        break;
+      case 'Enter':
+        e.preventDefault();
+        startEdit(selection.row, selection.col);
+        break;
+      case 'F2':
+        e.preventDefault();
+        startEdit(selection.row, selection.col);
+        break;
+      case 'Delete':
+      case 'Backspace':
+        e.preventDefault();
+        // Delete selected range
+        {
+          const { r1, c1, r2, c2 } = getSelRange();
+          setCells(prev => {
+            const next = { ...prev };
+            for (let r = r1; r <= r2; r++)
+              for (let c = c1; c <= c2; c++)
+                delete next[cellId(r, c)];
+            return next;
+          });
+        }
+        break;
+      default:
+        // Start typing to edit
+        if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+          e.preventDefault();
+          startEdit(selection.row, selection.col, e.key);
+        }
+        // Copy
+        if ((e.ctrlKey || e.metaKey) && e.key === 'c') {
+          e.preventDefault();
+          const { r1, c1, r2, c2 } = getSelRange();
+          const data = [];
+          let text = '';
+          for (let r = r1; r <= r2; r++) {
+            const rowData = [];
+            const rowText = [];
+            for (let c = c1; c <= c2; c++) {
+              const id = cellId(r, c);
+              rowData.push({ raw: cells[id]?.raw ?? '', r: r - r1, c: c - c1 });
+              rowText.push(getCellValue(r, c));
+            }
+            data.push(rowData);
+            text += rowText.join('\t') + '\n';
+          }
+          setCopyData({ data, baseRow: r1, baseCol: c1 });
+          navigator.clipboard?.writeText(text);
+        }
+        // Paste — handled by paste event listener on the grid
+        // Select all
+        if ((e.ctrlKey || e.metaKey) && e.key === 'a') {
+          e.preventDefault();
+          setSelRange({ startRow: 0, startCol: 0, endRow: numRows - 1, endCol: numCols - 1 });
+        }
+        break;
+    }
+  }, [editingCell, editValue, formulaBarFocused, commitEdit, selection, startEdit, numRows, numCols, getSelRange, cells, getCellValue, copyData]);
+
+  // Mouse down on cell
+  const handleCellMouseDown = useCallback((r, c, e) => {
+    if (e.button === 2) return; // right click
+    if (editingCell) {
+      commitEdit(editValue);
+    }
+    setSelection({ row: r, col: c });
+    setSelRange({ startRow: r, startCol: c, endRow: r, endCol: c });
+    setIsDragging(true);
+    setContextMenu(null);
+  }, [editingCell, editValue, commitEdit]);
+
+  const handleCellMouseEnter = useCallback((r, c) => {
+    if (isDragging) {
+      setSelRange(prev => prev ? { ...prev, endRow: r, endCol: c } : null);
+    }
+  }, [isDragging]);
+
+  useEffect(() => {
+    const handleMouseUp = () => setIsDragging(false);
+    window.addEventListener('mouseup', handleMouseUp);
+    return () => window.removeEventListener('mouseup', handleMouseUp);
+  }, []);
+
+  // Double-click to edit
+  const handleCellDoubleClick = useCallback((r, c) => {
+    startEdit(r, c);
+  }, [startEdit]);
+
+  // Context menu
+  const handleContextMenu = useCallback((e, r, c) => {
+    e.preventDefault();
+    setSelection({ row: r, col: c });
+    setContextMenu({ x: e.clientX, y: e.clientY, row: r, col: c });
+  }, []);
+
+  // Close context menu on click outside
+  useEffect(() => {
+    if (contextMenu) {
+      const handler = () => setContextMenu(null);
+      window.addEventListener('click', handler);
+      return () => window.removeEventListener('click', handler);
+    }
+  }, [contextMenu]);
+
+  // Insert/delete rows/cols
+  const insertRow = useCallback((afterRow) => {
+    setCells(prev => {
+      const next = {};
+      for (const [id, val] of Object.entries(prev)) {
+        const ref = parseCellRef(id);
+        if (ref.row > afterRow) {
+          next[cellId(ref.row + 1, ref.col)] = val;
+        } else {
+          next[id] = val;
+        }
+      }
+      return next;
+    });
+  }, []);
+
+  const deleteRow = useCallback((row) => {
+    setCells(prev => {
+      const next = {};
+      for (const [id, val] of Object.entries(prev)) {
+        const ref = parseCellRef(id);
+        if (ref.row === row) continue;
+        if (ref.row > row) {
+          next[cellId(ref.row - 1, ref.col)] = val;
+        } else {
+          next[id] = val;
+        }
+      }
+      return next;
+    });
+  }, []);
+
+  const insertCol = useCallback((afterCol) => {
+    setCells(prev => {
+      const next = {};
+      for (const [id, val] of Object.entries(prev)) {
+        const ref = parseCellRef(id);
+        if (ref.col > afterCol) {
+          next[cellId(ref.row, ref.col + 1)] = val;
+        } else {
+          next[id] = val;
+        }
+      }
+      return next;
+    });
+  }, []);
+
+  const deleteCol = useCallback((col) => {
+    setCells(prev => {
+      const next = {};
+      for (const [id, val] of Object.entries(prev)) {
+        const ref = parseCellRef(id);
+        if (ref.col === col) continue;
+        if (ref.col > col) {
+          next[cellId(ref.row, ref.col - 1)] = val;
+        } else {
+          next[id] = val;
+        }
+      }
+      return next;
+    });
+  }, []);
+
+  // Column resize
+  const resizingCol = useRef(null);
+  const handleColResizeStart = useCallback((col, e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    resizingCol.current = { col, startX: e.clientX, startWidth: colWidths[col] };
+    const onMove = (me) => {
+      if (resizingCol.current) {
+        const diff = me.clientX - resizingCol.current.startX;
+        setColWidths(prev => {
+          const next = [...prev];
+          next[resizingCol.current.col] = Math.max(40, resizingCol.current.startWidth + diff);
+          return next;
+        });
+      }
+    };
+    const onUp = () => {
+      // Mark column as manual mode
+      if (resizingCol.current) {
+        const c = resizingCol.current.col;
+        setManualCols(prev => new Set(prev).add(c));
+      }
+      resizingCol.current = null;
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  }, [colWidths]);
+
+  // Auto-fit column width by measuring content
+  const autoFitCol = useCallback((col) => {
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    ctx.font = '13px monospace';
+    let maxWidth = 40;
+    for (let r = 0; r < numRows; r++) {
+      const v = getCellValue(r, col);
+      if (v !== '' && v !== null && v !== undefined) {
+        const w = ctx.measureText(String(v)).width + 16; // padding
+        if (w > maxWidth) maxWidth = w;
+      }
+      // Also measure raw formula
+      const raw = getCellRaw(r, col);
+      if (raw && raw.startsWith('=')) {
+        const w = ctx.measureText(raw).width + 16;
+        if (w > maxWidth) maxWidth = w;
+      }
+    }
+    // Also measure header
+    const hw = ctx.measureText(colToLetter(col)).width + 16;
+    if (hw > maxWidth) maxWidth = hw;
+    setColWidths(prev => {
+      const next = [...prev];
+      next[col] = Math.ceil(Math.min(maxWidth, 600));
+      return next;
+    });
+  }, [numRows, getCellValue, getCellRaw]);
+
+  // Auto-fit row height by measuring content
+  const autoFitRow = useCallback((row) => {
+    const el = document.createElement('div');
+    el.style.cssText = 'position:absolute;visibility:hidden;font-size:13px;font-family:monospace;padding:0 4px;white-space:pre-wrap;word-break:break-all;';
+    document.body.appendChild(el);
+    let maxHeight = 24;
+    for (let c = 0; c < numCols; c++) {
+      const v = getCellValue(row, c);
+      if (v !== '' && v !== null && v !== undefined) {
+        el.style.width = colWidths[c] + 'px';
+        el.textContent = String(v);
+        const h = el.offsetHeight + 4;
+        if (h > maxHeight) maxHeight = h;
+      }
+    }
+    document.body.removeChild(el);
+    setRowHeights(prev => {
+      const next = [...prev];
+      next[row] = Math.ceil(Math.min(maxHeight, 400));
+      return next;
+    });
+  }, [numCols, getCellValue, colWidths]);
+
+  // Row resize by dragging row header bottom edge
+  const resizingRow = useRef(null);
+  const handleRowResizeStart = useCallback((row, e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    resizingRow.current = { row, startY: e.clientY, startHeight: rowHeights[row] };
+    const onMove = (me) => {
+      if (resizingRow.current) {
+        const diff = me.clientY - resizingRow.current.startY;
+        setRowHeights(prev => {
+          const next = [...prev];
+          next[resizingRow.current.row] = Math.max(20, resizingRow.current.startHeight + diff);
+          return next;
+        });
+      }
+    };
+    const onUp = () => {
+      // Mark row as manual mode
+      if (resizingRow.current) {
+        const r = resizingRow.current.row;
+        setManualRows(prev => new Set(prev).add(r));
+      }
+      resizingRow.current = null;
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  }, [rowHeights]);
+
+  // Double-click column resize handle to auto-fit (and re-enable auto mode)
+  const handleColResizeDblClick = useCallback((col, e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setManualCols(prev => { const next = new Set(prev); next.delete(col); return next; });
+    autoFitCol(col);
+  }, [autoFitCol]);
+
+  // Double-click row resize handle to auto-fit (and re-enable auto mode)
+  const handleRowResizeDblClick = useCallback((row, e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setManualRows(prev => { const next = new Set(prev); next.delete(row); return next; });
+    autoFitRow(row);
+  }, [autoFitRow]);
+
+  // Persist cells to localStorage
+  useEffect(() => {
+    try { localStorage.setItem('sheet_cells', JSON.stringify(cells)); } catch(e) {}
+  }, [cells]);
+
+  // Auto-fit all used columns and rows when cells change (skip manual ones)
+  useEffect(() => {
+    const usedCols = new Set();
+    const usedRows = new Set();
+    for (const id of Object.keys(cells)) {
+      const ref = parseCellRef(id);
+      if (ref) {
+        usedCols.add(ref.col);
+        usedRows.add(ref.row);
+      }
+    }
+    for (const c of usedCols) { if (!manualCols.has(c)) autoFitCol(c); }
+    for (const r of usedRows) { if (!manualRows.has(r)) autoFitRow(r); }
+  }, [cells, autoFitCol, autoFitRow, manualCols, manualRows]);
+
+  // Stats for status bar
+  const stats = useMemo(() => {
+    const { r1, c1, r2, c2 } = getSelRange();
+    const vals = [];
+    for (let r = r1; r <= r2; r++) {
+      for (let c = c1; c <= c2; c++) {
+        const v = getCellValue(r, c);
+        if (v !== '' && v !== null && v !== undefined) {
+          try { vals.push(new Decimal(v)); } catch(e) {}
+        }
+      }
+    }
+    if (vals.length === 0) return null;
+    const sum = vals.reduce((a, b) => a.plus(b), new Decimal(0));
+    const avg = sum.div(vals.length);
+    const min = vals.reduce((a, b) => a.lt(b) ? a : b);
+    const max = vals.reduce((a, b) => a.gt(b) ? a : b);
+    return {
+      count: vals.length,
+      sum: sum.toSignificantDigits(significantDigits).toFixed(),
+      avg: avg.toSignificantDigits(significantDigits).toFixed(),
+      min: min.toSignificantDigits(significantDigits).toFixed(),
+      max: max.toSignificantDigits(significantDigits).toFixed(),
+    };
+  }, [getSelRange, getCellValue, significantDigits]);
+
+  // Focus grid on mount
+  useEffect(() => { gridRef.current?.focus(); }, []);
+
+  // Auto-focus edit input
+  useEffect(() => {
+    if (editingCell && !formulaBarFocused) {
+      editInputRef.current?.focus();
+    }
+  }, [editingCell, formulaBarFocused]);
+
+  // Save / Load
+  const handleSave = useCallback(() => {
+    const data = JSON.stringify({ cells, colWidths, significantDigits });
+    const blob = new Blob([data], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'sheet.json'; a.click();
+    URL.revokeObjectURL(url);
+  }, [cells, colWidths, significantDigits]);
+
+  const handleLoad = useCallback(() => {
+    const input = document.createElement('input');
+    input.type = 'file'; input.accept = '.json,.csv,.tsv';
+    input.onchange = (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        const text = ev.target.result;
+        if (file.name.endsWith('.json')) {
+          try {
+            const data = JSON.parse(text);
+            if (data.cells) setCells(data.cells);
+            if (data.colWidths) setColWidths(data.colWidths);
+            if (data.significantDigits) setSignificantDigits(data.significantDigits);
+          } catch(e) { alert('Invalid JSON file'); }
+        } else {
+          // CSV / TSV
+          const sep = file.name.endsWith('.tsv') ? '\t' : ',';
+          const lines = text.split('\n');
+          const newCells = {};
+          lines.forEach((line, ri) => {
+            if (!line.trim()) return;
+            const cols = line.split(sep);
+            cols.forEach((val, ci) => {
+              val = val.trim().replace(/^"|"$/g, '');
+              if (val) newCells[cellId(ri, ci)] = { raw: val };
+            });
+          });
+          setCells(newCells);
+        }
+      };
+      reader.readAsText(file);
+    };
+    input.click();
+  }, []);
+
+  const handleExportCSV = useCallback(() => {
+    // Find extent of data
+    let maxR = 0, maxC = 0;
+    for (const id of Object.keys(cells)) {
+      const ref = parseCellRef(id);
+      if (ref) { maxR = Math.max(maxR, ref.row); maxC = Math.max(maxC, ref.col); }
+    }
+    let csv = '';
+    for (let r = 0; r <= maxR; r++) {
+      const row = [];
+      for (let c = 0; c <= maxC; c++) {
+        const v = getCellValue(r, c);
+        row.push(v.includes(',') ? `"${v}"` : v);
+      }
+      csv += row.join(',') + '\n';
+    }
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'sheet.csv'; a.click();
+    URL.revokeObjectURL(url);
+  }, [cells, getCellValue]);
+
+  // Render
+  const rows = [];
+  for (let r = 0; r < numRows; r++) {
+    const rowCells = [];
+    for (let c = 0; c < numCols; c++) {
+      const id = cellId(r, c);
+      const isEditing = editingCell && editingCell.row === r && editingCell.col === c;
+      const isSelected = selection.row === r && selection.col === c;
+      const inRange = isInRange(r, c);
+      const value = getCellValue(r, c);
+      const display = formatValue(value);
+      const isError = typeof value === 'string' && value.startsWith('#');
+      const isNum = isNumeric(value);
+
+      rowCells.push(
+        <td
+          key={c}
+          className={
+            (isSelected ? 'selected ' : '') +
+            (inRange && !isSelected ? 'in-range ' : '') +
+            (isEditing ? 'editing ' : '') +
+            (isError ? 'error ' : '') +
+            (isNum && !isEditing ? 'number ' : '')
+          }
+          style={{ width: colWidths[c], maxWidth: colWidths[c] }}
+          onMouseDown={(e) => handleCellMouseDown(r, c, e)}
+          onMouseEnter={() => handleCellMouseEnter(r, c)}
+          onDoubleClick={() => handleCellDoubleClick(r, c)}
+          onContextMenu={(e) => handleContextMenu(e, r, c)}
+          title={isError ? value : (cells[id]?.raw?.startsWith('=') ? cells[id].raw + ' = ' + value : '')}
+        >
+          {isEditing && !formulaBarFocused ? (
+            <input
+              ref={editInputRef}
+              value={editValue}
+              onChange={(e) => { setEditValue(e.target.value); setFormulaBarValue(e.target.value); }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  commitEdit(editValue);
+                  setSelection(prev => ({ row: Math.min(prev.row + 1, numRows - 1), col: prev.col }));
+                  gridRef.current?.focus();
+                } else if (e.key === 'Tab') {
+                  e.preventDefault();
+                  commitEdit(editValue);
+                  const dir = e.shiftKey ? -1 : 1;
+                  setSelection(prev => ({ row: prev.row, col: Math.max(0, Math.min(prev.col + dir, numCols - 1)) }));
+                  gridRef.current?.focus();
+                } else if (e.key === 'Escape') {
+                  setEditingCell(null);
+                  gridRef.current?.focus();
+                }
+              }}
+              onBlur={() => {
+                // Delay to allow click events to process
+                setTimeout(() => {
+                  if (editingCell && editingCell.row === r && editingCell.col === c) {
+                    commitEdit(editValue);
+                  }
+                }, 100);
+              }}
+            />
+          ) : display}
+        </td>
+      );
+    }
+    rows.push(
+      <tr key={r} style={{ height: rowHeights[r] }}>
+        <th className="row-header">
+          {r + 1}
+          <div className="row-resize"
+            onMouseDown={(e) => handleRowResizeStart(r, e)}
+            onDoubleClick={(e) => handleRowResizeDblClick(r, e)}
+          />
+        </th>
+        {rowCells}
+      </tr>
+    );
+  }
+
+  return (
+    <div className="app" onClick={() => setContextMenu(null)}>
+      {/* Toolbar */}
+      <div className="toolbar">
+        <span className="title">Precision Sheet</span>
+        <button onClick={handleSave}>Save</button>
+        <button onClick={handleLoad}>Open</button>
+        <button onClick={handleExportCSV}>Export CSV</button>
+        <div className="precision-control">
+          <label>Significant digits:</label>
+          <input
+            type="number"
+            min="1"
+            max="1000"
+            value={significantDigits}
+            onChange={(e) => setSignificantDigits(Math.max(1, Math.min(1000, parseInt(e.target.value) || 6)))}
+          />
+        </div>
+        <div className="precision-control">
+          <label>Compute precision:</label>
+          <input
+            type="number"
+            min="1"
+            max="1000"
+            defaultValue={50}
+            onChange={(e) => {
+              const v = Math.max(1, Math.min(1000, parseInt(e.target.value) || 50));
+              Decimal.set({ precision: v });
+            }}
+          />
+        </div>
+        <button className="theme-toggle" onClick={toggleTheme} title={`Theme: ${theme === 'auto' ? 'Auto' : theme} (click to toggle)`}>
+          {effectiveTheme === 'dark' ? '\u2600\uFE0F' : '\uD83C\uDF19'}
+        </button>
+      </div>
+
+      {/* Formula Bar */}
+      <div className="formula-bar">
+        <input
+          className="cell-ref"
+          value={cellId(selection.row, selection.col)}
+          readOnly
+        />
+        <span className="formula-icon">fx</span>
+        <input
+          ref={formulaInputRef}
+          className="formula-input"
+          value={formulaBarValue}
+          onChange={handleFormulaBarChange}
+          onFocus={handleFormulaBarFocus}
+          onBlur={() => {
+            setTimeout(() => {
+              setFormulaBarFocused(false);
+              if (editingCell) commitEdit(formulaBarValue);
+            }, 100);
+          }}
+          onKeyDown={handleFormulaBarKeyDown}
+        />
+      </div>
+
+      {/* Grid */}
+      <div className="grid-container" ref={gridRef} tabIndex={0} onKeyDown={handleGridKeyDown} style={{outline:'none'}}>
+        <table className="grid">
+          <thead>
+            <tr>
+              <th className="corner"></th>
+              {Array.from({ length: numCols }, (_, c) => (
+                <th key={c} className="col-header" style={{ width: colWidths[c], maxWidth: colWidths[c], position: 'relative' }}>
+                  {colToLetter(c)}
+                  <div className="col-resize"
+                    onMouseDown={(e) => handleColResizeStart(c, e)}
+                    onDoubleClick={(e) => handleColResizeDblClick(c, e)}
+                  />
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Status Bar */}
+      <div className="status-bar">
+        <span>{Object.keys(cells).length} cells</span>
+        {stats && (
+          <div className="stats">
+            <span className="stat"><label>Count:</label>{stats.count}</span>
+            <span className="stat"><label>Sum:</label>{stats.sum}</span>
+            <span className="stat"><label>Avg:</label>{stats.avg}</span>
+            <span className="stat"><label>Min:</label>{stats.min}</span>
+            <span className="stat"><label>Max:</label>{stats.max}</span>
+          </div>
+        )}
+      </div>
+
+      {/* Context Menu */}
+      {contextMenu && (
+        <div className="context-menu" style={{ left: contextMenu.x, top: contextMenu.y }} onClick={e => e.stopPropagation()}>
+          <div className="context-menu-item" onClick={() => { startEdit(contextMenu.row, contextMenu.col); setContextMenu(null); }}>Edit Cell</div>
+          <div className="context-menu-item" onClick={() => {
+            const id = cellId(contextMenu.row, contextMenu.col);
+            setCells(prev => { const next = { ...prev }; delete next[id]; return next; });
+            setContextMenu(null);
+          }}>Clear Cell</div>
+          <div className="context-menu-sep" />
+          <div className="context-menu-item" onClick={() => { insertRow(contextMenu.row); setContextMenu(null); }}>Insert Row Below</div>
+          <div className="context-menu-item" onClick={() => { deleteRow(contextMenu.row); setContextMenu(null); }}>Delete Row</div>
+          <div className="context-menu-sep" />
+          <div className="context-menu-item" onClick={() => { insertCol(contextMenu.col); setContextMenu(null); }}>Insert Column Right</div>
+          <div className="context-menu-item" onClick={() => { deleteCol(contextMenu.col); setContextMenu(null); }}>Delete Column</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
