@@ -181,14 +181,25 @@ function letterToCol(s) {
   return c - 1;
 }
 
-// Parse cell reference like "A1" -> { col, row }
+// Parse cell reference like "A1", "$A1", "A$1", "$A$1" -> { col, row }
 function parseCellRef(ref) {
-  const m = ref.match(/^([A-Za-z]+)(\d+)$/);
+  const m = ref.match(/^\$?([A-Za-z]+)\$?(\d+)$/);
   if (!m) return null;
   return { col: letterToCol(m[1]), row: parseInt(m[2]) - 1 };
 }
 
 function cellId(r, c) { return colToLetter(c) + (r + 1); }
+
+// Adjust cell references in a formula by row/col offset, respecting $ absolute markers
+function adjustFormulaCellRefs(raw, dRow, dCol) {
+  if (!raw.startsWith('=')) return raw;
+  // Match optional $ before col letters and optional $ before row digits
+  return raw.replace(/(\$?)([A-Za-z]+)(\$?)(\d+)/g, (match, absc, col, absr, row) => {
+    const newCol = absc ? col : colToLetter(Math.max(0, letterToCol(col) + dCol));
+    const newRow = absr ? row : String(Math.max(1, parseInt(row) + dRow));
+    return absc + newCol + absr + newRow;
+  });
+}
 
 // Parse a range like "A1:B5" into list of {row, col}
 function parseRange(rangeStr) {
@@ -233,18 +244,18 @@ function tokenize(expr) {
       tokens.push({ type: 'string', value: s });
       continue;
     }
-    // Cell ref or range or function name
-    if (/[A-Za-z_]/.test(expr[i])) {
+    // Cell ref (with optional $ markers) or range or function name
+    if (/[\$A-Za-z_]/.test(expr[i])) {
       let name = '';
-      while (i < expr.length && /[A-Za-z0-9_]/.test(expr[i])) { name += expr[i++]; }
+      while (i < expr.length && /[\$A-Za-z0-9_]/.test(expr[i])) { name += expr[i++]; }
       // Check for range
       if (i < expr.length && expr[i] === ':') {
         i++; // skip ':'
         let name2 = '';
-        while (i < expr.length && /[A-Za-z0-9_]/.test(expr[i])) { name2 += expr[i++]; }
+        while (i < expr.length && /[\$A-Za-z0-9_]/.test(expr[i])) { name2 += expr[i++]; }
         tokens.push({ type: 'range', value: name + ':' + name2 });
       } else if (i < expr.length && expr[i] === '(') {
-        tokens.push({ type: 'function', value: name.toUpperCase() });
+        tokens.push({ type: 'function', value: name.replace(/\$/g, '').toUpperCase() });
       } else {
         tokens.push({ type: 'cell', value: name.toUpperCase() });
       }
@@ -873,12 +884,14 @@ function App() {
 
     // Internal copy takes priority
     if (copyData) {
+      const dRow = selection.row - copyData.baseRow;
+      const dCol = selection.col - copyData.baseCol;
       setCells(prev => {
         const next = { ...prev };
         for (const row of copyData.data) {
           for (const cell of row) {
             const id = cellId(selection.row + cell.r, selection.col + cell.c);
-            if (cell.raw) next[id] = { raw: cell.raw };
+            if (cell.raw) next[id] = { raw: adjustFormulaCellRefs(cell.raw, dRow, dCol) };
             else delete next[id];
           }
         }
