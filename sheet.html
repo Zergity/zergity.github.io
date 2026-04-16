@@ -882,21 +882,47 @@ function App() {
 
     e.preventDefault();
 
-    // Internal copy takes priority
-    if (copyData) {
-      const dRow = selection.row - copyData.baseRow;
-      const dCol = selection.col - copyData.baseCol;
+    const { r1, c1, r2, c2 } = getSelRange();
+    const selRows = r2 - r1 + 1;
+    const selCols = c2 - c1 + 1;
+
+    // Helper: tile a grid of raw values into the selected range
+    const pasteGrid = (grid, srcBaseRow, srcBaseCol) => {
+      const srcRows = grid.length;
+      const srcCols = Math.max(...grid.map(r => r.length));
+      // If selection is a single cell, paste at natural size; otherwise tile to fill
+      const isSingleCell = selRows === 1 && selCols === 1;
+      const fillRows = isSingleCell ? srcRows : selRows;
+      const fillCols = isSingleCell ? srcCols : selCols;
       setCells(prev => {
         const next = { ...prev };
-        for (const row of copyData.data) {
-          for (const cell of row) {
-            const id = cellId(selection.row + cell.r, selection.col + cell.c);
-            if (cell.raw) next[id] = { raw: adjustFormulaCellRefs(cell.raw, dRow, dCol) };
+        for (let ri = 0; ri < fillRows; ri++) {
+          for (let ci = 0; ci < fillCols; ci++) {
+            const sr = ri % srcRows;
+            const sc = ci % srcCols;
+            const raw = grid[sr]?.[sc] ?? '';
+            const dRow = (r1 + ri) - (srcBaseRow + sr);
+            const dCol = (c1 + ci) - (srcBaseCol + sc);
+            const id = cellId(r1 + ri, c1 + ci);
+            const adjusted = adjustFormulaCellRefs(raw, dRow, dCol);
+            if (adjusted) next[id] = { raw: adjusted };
             else delete next[id];
           }
         }
         return next;
       });
+    };
+
+    // Internal copy takes priority
+    if (copyData) {
+      const grid = copyData.data.reduce((acc, row) => {
+        for (const cell of row) {
+          if (!acc[cell.r]) acc[cell.r] = [];
+          acc[cell.r][cell.c] = cell.raw;
+        }
+        return acc;
+      }, []);
+      pasteGrid(grid, copyData.baseRow, copyData.baseCol);
       return;
     }
 
@@ -910,15 +936,12 @@ function App() {
     if (html) {
       const parsed = parseGoogleSheetsHtml(html);
       if (parsed) {
-        setCells(prev => {
-          const next = { ...prev };
-          for (const cell of parsed) {
-            const id = cellId(selection.row + cell.r, selection.col + cell.c);
-            if (cell.raw) next[id] = { raw: cell.raw };
-            else delete next[id];
-          }
-          return next;
-        });
+        const grid = [];
+        for (const cell of parsed) {
+          if (!grid[cell.r]) grid[cell.r] = [];
+          grid[cell.r][cell.c] = cell.raw;
+        }
+        pasteGrid(grid, 0, 0);
         return;
       }
     }
@@ -926,21 +949,10 @@ function App() {
     // Fall back to plain text (tab-separated)
     if (text) {
       const lines = text.split('\n').filter(l => l.length > 0);
-      setCells(prev => {
-        const next = { ...prev };
-        lines.forEach((line, ri) => {
-          const cols = line.split('\t');
-          cols.forEach((v, ci) => {
-            const val = stripPrecisionWrappers(v);
-            const id = cellId(selection.row + ri, selection.col + ci);
-            if (val) next[id] = { raw: val };
-            else delete next[id];
-          });
-        });
-        return next;
-      });
+      const grid = lines.map(line => line.split('\t').map(v => stripPrecisionWrappers(v)));
+      pasteGrid(grid, 0, 0);
     }
-  }, [parseGoogleSheetsHtml, selection, copyData]);
+  }, [parseGoogleSheetsHtml, selection, copyData, getSelRange]);
 
   // Attach paste event listener to document so it works regardless of focus target
   useEffect(() => {
