@@ -562,9 +562,35 @@ function evaluate(formula, getCellValue, visited) {
 
 // Main App
 function App() {
-  const [cells, setCells] = useState(() => {
+  const [cells, setCellsRaw] = useState(() => {
     try { return JSON.parse(localStorage.getItem('sheet_cells')) || {}; } catch(e) { return {}; }
   });
+  const undoStack = useRef([]);
+  const redoStack = useRef([]);
+  const setCells = useCallback((updater) => {
+    setCellsRaw(prev => {
+      const next = typeof updater === 'function' ? updater(prev) : updater;
+      if (next !== prev) {
+        undoStack.current.push(prev);
+        redoStack.current = [];
+      }
+      return next;
+    });
+  }, []);
+  const undo = useCallback(() => {
+    if (undoStack.current.length === 0) return;
+    setCellsRaw(prev => {
+      redoStack.current.push(prev);
+      return undoStack.current.pop();
+    });
+  }, []);
+  const redo = useCallback(() => {
+    if (redoStack.current.length === 0) return;
+    setCellsRaw(prev => {
+      undoStack.current.push(prev);
+      return redoStack.current.pop();
+    });
+  }, []);
   const [selection, setSelection] = useState({ row: 0, col: 0 });
   const [editingCell, setEditingCell] = useState(null);
   const [editValue, setEditValue] = useState('');
@@ -1058,9 +1084,19 @@ function App() {
           e.preventDefault();
           setSelRange({ startRow: 0, startCol: 0, endRow: numRows - 1, endCol: numCols - 1 });
         }
+        // Undo
+        if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
+          e.preventDefault();
+          undo();
+        }
+        // Redo
+        if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.key === 'z' && e.shiftKey))) {
+          e.preventDefault();
+          redo();
+        }
         break;
     }
-  }, [editingCell, editValue, formulaBarFocused, commitEdit, selection, startEdit, numRows, numCols, getSelRange, cells, getCellValue, copyData]);
+  }, [editingCell, editValue, formulaBarFocused, commitEdit, selection, startEdit, numRows, numCols, getSelRange, cells, getCellValue, copyData, undo, redo]);
 
   // Build a cell or range reference string from drag coordinates
   const buildRef = useCallback((startRow, startCol, endRow, endCol) => {
