@@ -616,6 +616,9 @@ function App() {
   const gridRef = useRef(null);
   const editInputRef = useRef(null);
   const formulaInputRef = useRef(null);
+  // Tracks in-progress formula cell/range reference insertion via click/drag
+  // { cursor, baseValue, startRow, startCol, inputEl }
+  const formulaRefInsert = useRef(null);
   const autoFitColRef = useRef(null);
   const autoFitRowRef = useRef(null);
 
@@ -1059,28 +1062,44 @@ function App() {
     }
   }, [editingCell, editValue, formulaBarFocused, commitEdit, selection, startEdit, numRows, numCols, getSelRange, cells, getCellValue, copyData]);
 
+  // Build a cell or range reference string from drag coordinates
+  const buildRef = useCallback((startRow, startCol, endRow, endCol) => {
+    const r1 = Math.min(startRow, endRow), r2 = Math.max(startRow, endRow);
+    const c1 = Math.min(startCol, endCol), c2 = Math.max(startCol, endCol);
+    if (r1 === r2 && c1 === c2) return cellId(r1, c1);
+    return cellId(r1, c1) + ':' + cellId(r2, c2);
+  }, []);
+
+  // Update the formula edit value with the current reference from drag state
+  const applyFormulaRef = useCallback((ref) => {
+    const ins = formulaRefInsert.current;
+    if (!ins) return;
+    const newValue = ins.baseValue.slice(0, ins.cursor) + ref + ins.baseValue.slice(ins.cursor);
+    setEditValue(newValue);
+    setFormulaBarValue(newValue);
+    const pos = ins.cursor + ref.length;
+    setTimeout(() => {
+      if (ins.inputEl) {
+        ins.inputEl.selectionStart = pos;
+        ins.inputEl.selectionEnd = pos;
+        ins.inputEl.focus();
+      }
+    }, 0);
+  }, []);
+
   // Mouse down on cell
   const handleCellMouseDown = useCallback((r, c, e) => {
     if (e.button === 2) return; // right click
     if (editingCell && editValue.startsWith('=') && (r !== editingCell.row || c !== editingCell.col)) {
       e.preventDefault();
-      const ref = cellId(r, c);
       const inputEl = formulaBarFocused ? formulaInputRef.current : editInputRef.current;
       const cursor = inputEl?.selectionStart ?? editValue.length;
-      const newValue = editValue.slice(0, cursor) + ref + editValue.slice(cursor);
-      setEditValue(newValue);
-      setFormulaBarValue(newValue);
-      // Restore cursor position after the inserted ref
-      setTimeout(() => {
-        if (inputEl) {
-          const pos = cursor + ref.length;
-          inputEl.selectionStart = pos;
-          inputEl.selectionEnd = pos;
-          inputEl.focus();
-        }
-      }, 0);
+      formulaRefInsert.current = { cursor, baseValue: editValue, startRow: r, startCol: c, inputEl };
+      applyFormulaRef(cellId(r, c));
+      setIsDragging(true);
       return;
     }
+    formulaRefInsert.current = null;
     if (editingCell) {
       commitEdit(editValue);
     }
@@ -1088,16 +1107,24 @@ function App() {
     setSelRange({ startRow: r, startCol: c, endRow: r, endCol: c });
     setIsDragging(true);
     setContextMenu(null);
-  }, [editingCell, editValue, commitEdit, formulaBarFocused]);
+  }, [editingCell, editValue, commitEdit, formulaBarFocused, applyFormulaRef]);
 
   const handleCellMouseEnter = useCallback((r, c) => {
-    if (isDragging) {
+    if (!isDragging) return;
+    const ins = formulaRefInsert.current;
+    if (ins) {
+      const ref = buildRef(ins.startRow, ins.startCol, r, c);
+      applyFormulaRef(ref);
+    } else {
       setSelRange(prev => prev ? { ...prev, endRow: r, endCol: c } : null);
     }
-  }, [isDragging]);
+  }, [isDragging, buildRef, applyFormulaRef]);
 
   useEffect(() => {
-    const handleMouseUp = () => setIsDragging(false);
+    const handleMouseUp = () => {
+      setIsDragging(false);
+      formulaRefInsert.current = null;
+    };
     window.addEventListener('mouseup', handleMouseUp);
     return () => window.removeEventListener('mouseup', handleMouseUp);
   }, []);
