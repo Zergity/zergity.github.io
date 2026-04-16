@@ -1062,6 +1062,25 @@ function App() {
   // Mouse down on cell
   const handleCellMouseDown = useCallback((r, c, e) => {
     if (e.button === 2) return; // right click
+    if (editingCell && editValue.startsWith('=') && (r !== editingCell.row || c !== editingCell.col)) {
+      e.preventDefault();
+      const ref = cellId(r, c);
+      const inputEl = formulaBarFocused ? formulaInputRef.current : editInputRef.current;
+      const cursor = inputEl?.selectionStart ?? editValue.length;
+      const newValue = editValue.slice(0, cursor) + ref + editValue.slice(cursor);
+      setEditValue(newValue);
+      setFormulaBarValue(newValue);
+      // Restore cursor position after the inserted ref
+      setTimeout(() => {
+        if (inputEl) {
+          const pos = cursor + ref.length;
+          inputEl.selectionStart = pos;
+          inputEl.selectionEnd = pos;
+          inputEl.focus();
+        }
+      }, 0);
+      return;
+    }
     if (editingCell) {
       commitEdit(editValue);
     }
@@ -1069,7 +1088,7 @@ function App() {
     setSelRange({ startRow: r, startCol: c, endRow: r, endCol: c });
     setIsDragging(true);
     setContextMenu(null);
-  }, [editingCell, editValue, commitEdit]);
+  }, [editingCell, editValue, commitEdit, formulaBarFocused]);
 
   const handleCellMouseEnter = useCallback((r, c) => {
     if (isDragging) {
