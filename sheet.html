@@ -1015,23 +1015,63 @@ function App() {
     switch (e.key) {
       case 'ArrowUp':
         e.preventDefault();
-        setSelection(prev => ({ ...prev, row: Math.max(0, prev.row - 1) }));
-        setSelRange(null);
+        if (shift) {
+          setSelRange(prev => {
+            const sr = prev ? prev.startRow : selection.row;
+            const sc = prev ? prev.startCol : selection.col;
+            const er = prev ? prev.endRow : selection.row;
+            const ec = prev ? prev.endCol : selection.col;
+            return { startRow: sr, startCol: sc, endRow: Math.max(0, er - 1), endCol: ec };
+          });
+        } else {
+          setSelection(prev => ({ ...prev, row: Math.max(0, prev.row - 1) }));
+          setSelRange(null);
+        }
         break;
       case 'ArrowDown':
         e.preventDefault();
-        setSelection(prev => ({ ...prev, row: Math.min(numRows - 1, prev.row + 1) }));
-        setSelRange(null);
+        if (shift) {
+          setSelRange(prev => {
+            const sr = prev ? prev.startRow : selection.row;
+            const sc = prev ? prev.startCol : selection.col;
+            const er = prev ? prev.endRow : selection.row;
+            const ec = prev ? prev.endCol : selection.col;
+            return { startRow: sr, startCol: sc, endRow: Math.min(numRows - 1, er + 1), endCol: ec };
+          });
+        } else {
+          setSelection(prev => ({ ...prev, row: Math.min(numRows - 1, prev.row + 1) }));
+          setSelRange(null);
+        }
         break;
       case 'ArrowLeft':
         e.preventDefault();
-        setSelection(prev => ({ ...prev, col: Math.max(0, prev.col - 1) }));
-        setSelRange(null);
+        if (shift) {
+          setSelRange(prev => {
+            const sr = prev ? prev.startRow : selection.row;
+            const sc = prev ? prev.startCol : selection.col;
+            const er = prev ? prev.endRow : selection.row;
+            const ec = prev ? prev.endCol : selection.col;
+            return { startRow: sr, startCol: sc, endRow: er, endCol: Math.max(0, ec - 1) };
+          });
+        } else {
+          setSelection(prev => ({ ...prev, col: Math.max(0, prev.col - 1) }));
+          setSelRange(null);
+        }
         break;
       case 'ArrowRight':
         e.preventDefault();
-        setSelection(prev => ({ ...prev, col: Math.min(numCols - 1, prev.col + 1) }));
-        setSelRange(null);
+        if (shift) {
+          setSelRange(prev => {
+            const sr = prev ? prev.startRow : selection.row;
+            const sc = prev ? prev.startCol : selection.col;
+            const er = prev ? prev.endRow : selection.row;
+            const ec = prev ? prev.endCol : selection.col;
+            return { startRow: sr, startCol: sc, endRow: er, endCol: Math.min(numCols - 1, ec + 1) };
+          });
+        } else {
+          setSelection(prev => ({ ...prev, col: Math.min(numCols - 1, prev.col + 1) }));
+          setSelRange(null);
+        }
         break;
       case 'Tab':
         e.preventDefault();
@@ -1152,11 +1192,18 @@ function App() {
     if (editingCell) {
       commitEdit(editValue);
     }
-    setSelection({ row: r, col: c });
-    setSelRange({ startRow: r, startCol: c, endRow: r, endCol: c });
+    if (e.shiftKey) {
+      // Extend selection range from current selection to clicked cell
+      setSelRange(prev => prev
+        ? { ...prev, endRow: r, endCol: c }
+        : { startRow: selection.row, startCol: selection.col, endRow: r, endCol: c });
+    } else {
+      setSelection({ row: r, col: c });
+      setSelRange({ startRow: r, startCol: c, endRow: r, endCol: c });
+    }
     setIsDragging(true);
     setContextMenu(null);
-  }, [editingCell, editValue, commitEdit, formulaBarFocused, applyFormulaRef]);
+  }, [editingCell, editValue, commitEdit, formulaBarFocused, applyFormulaRef, selection]);
 
   const handleCellMouseEnter = useCallback((r, c) => {
     if (!isDragging) return;
